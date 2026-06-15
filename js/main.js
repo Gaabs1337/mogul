@@ -17,6 +17,7 @@
   var lastAutoBuy = 0;
   var nextEventAt = 0;
   var offlineResult = null;
+  var rndAnnounced = false;
 
   function now() { return Date.now(); }
 
@@ -31,6 +32,8 @@
       offlineResult = G.applyOffline(state, elapsed, derived);
       derived = G.derive(state, now());
     }
+
+    rndAnnounced = G.innovationsUnlocked(state); // don't re-announce on every load
 
     // settings -> environment
     A.setEnabled(state.settings.sound);
@@ -105,11 +108,21 @@
         flashDot('dot-trophies');
         if (currentTabIs('trophies')) UI.invalidate('trophies');
       }
+      // phase-shift beats
+      var newEra = G.checkEra(state);
+      if (newEra) { A.play('ipo'); UI.eraModal(newEra); }
+      else if (G.checkPinnacle(state)) { A.play('ipo'); UI.pinnacleModal(); }
+      // R&D unlock moment
+      if (!rndAnnounced && G.innovationsUnlocked(state)) {
+        rndAnnounced = true;
+        UI.toast('💡 R&D unlocked — your managers now generate Insight.', 'gold');
+        flashDot('dot-rnd');
+      }
     }
 
     if (t >= nextEventAt && !document.querySelector('.event-token')) {
       UI.spawnEventToken(pickEvent(), function () {});
-      var gap = rand(D.CONFIG.eventMinGap, D.CONFIG.eventMaxGap) * (derived.board.eventFreq || 1);
+      var gap = rand(D.CONFIG.eventMinGap, D.CONFIG.eventMaxGap) * (derived.board.eventFreq || 1) * (derived.innov.eventFreqMult || 1);
       nextEventAt = t + gap * 1000;
     }
 
@@ -182,6 +195,25 @@
       case 'perk': {
         if (G.buyDynastyPerk(state, p.id)) { A.play('upgrade'); UI.invalidate('board'); }
         else A.play('error');
+        break;
+      }
+      case 'innovate': {
+        if (G.buyInnovation(state, p.id)) {
+          A.play('milestone');
+          derived = G.derive(state, now());
+          var n = G.INNOV_BY_ID[p.id];
+          UI.toast('💡 ' + (n ? n.name : 'Innovation') + ' unlocked!', 'gold');
+          UI.invalidate('rnd');
+        } else A.play('error');
+        break;
+      }
+      case 'boost': {
+        var r = G.activateBoost(state, p.id, now(), derived);
+        if (r) {
+          A.play('event');
+          if (r.kind === 'surge') { UI.toast('⚡ Surge! Profit ×' + D.CONFIG.boostSurgeMult + ' for ' + r.dur + 's', 'gold'); UI.burst(window.innerWidth / 2, window.innerHeight * 0.45, 18, '#f3c969'); }
+          else if (r.kind === 'injection') { UI.toast('💉 Cash Injection! +' + F.money(r.amount), 'gold'); buttonFloat(p.el, '+' + F.money(r.amount)); }
+        } else A.play('error');
         break;
       }
       case 'buyamount': {
@@ -344,6 +376,13 @@
       var g = Math.max(1, Math.round((state.investors || 0) * 0.03));
       state.investors += g; state.investorsAllTime += g;
       UI.toast('😇 Investor Tip! +' + F.scaled(g) + ' Investors', 'gold');
+    }
+    // Market Intelligence innovation: Opportunities also grant Insight
+    var insGain = (derived.innov && derived.innov.eventInsight) ? derived.innov.eventInsight : 0;
+    if (insGain > 0 && G.innovationsUnlocked(state)) {
+      state.insight = (state.insight || 0) + insGain;
+      state.insightTotal = (state.insightTotal || 0) + insGain;
+      UI.floater(caught.x, caught.y + 26, '+' + F.scaled(insGain) + ' 💡', 'small');
     }
     saveNow();
   }

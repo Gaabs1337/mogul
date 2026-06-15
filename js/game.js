@@ -24,6 +24,9 @@
   var BOARD = data.BOARD;
   var DYNASTY_PERKS = data.DYNASTY_PERKS;
   var ACHIEVEMENTS = data.ACHIEVEMENTS;
+  var INNOVATIONS = data.INNOVATIONS;
+  var BOOSTS = data.BOOSTS;
+  var ERAS = data.ERAS;
 
   // Quick lookup maps.
   var BIZ_BY_ID = {};
@@ -34,6 +37,10 @@
   BOARD.forEach(function (n) { BOARD_BY_ID[n.id] = n; });
   var PERK_BY_ID = {};
   DYNASTY_PERKS.forEach(function (p) { PERK_BY_ID[p.id] = p; });
+  var INNOV_BY_ID = {};
+  INNOVATIONS.forEach(function (n) { INNOV_BY_ID[n.id] = n; });
+  var BOOST_BY_ID = {};
+  BOOSTS.forEach(function (b) { BOOST_BY_ID[b.id] = b; });
 
   // ---------------------------------------------------------------------------
   // Cost curves
@@ -173,25 +180,97 @@
     return 1 + Math.pow(inv, CONFIG.investorMultExp) * CONFIG.investorPerBonus * boardEff;
   }
 
-  // Full per-frame derivation. nowMs governs temporary event buffs.
+  // ---- Innovations (R&D) ----
+  function deriveInnovations(state) {
+    var out = {
+      franchise: 0, synergy: 0, scale: 0, offlineCap: 0, offlineEff: 0,
+      insightRate: 1, boosts: false, analytics: false, eventInsight: 0, eventFreqMult: 1, profit: 1
+    };
+    var innov = state.innovations || {};
+    for (var id in innov) {
+      if (!innov[id]) continue;
+      var n = INNOV_BY_ID[id]; if (!n) continue;
+      var e = n.effect;
+      switch (e.kind) {
+        case 'franchise': out.franchise = Math.max(out.franchise, e.value); break;
+        case 'synergy': out.synergy += e.value; break;
+        case 'scale': out.scale += e.value; break;
+        case 'offline': out.offlineCap += e.cap; out.offlineEff = Math.max(out.offlineEff, e.eff); break;
+        case 'insightRate': out.insightRate *= e.value; break;
+        case 'boosts': out.boosts = true; break;
+        case 'analytics': out.analytics = true; break;
+        case 'eventInsight': out.eventInsight += e.value; out.eventFreqMult *= 0.8; break;
+        case 'profit': out.profit *= e.value; break;
+      }
+    }
+    return out;
+  }
+
+  // ---- Eras ----
+  function eraIndex(state) {
+    var idx = 0;
+    for (var i = 0; i < ERAS.length; i++) if ((state.earnedAll || 0) >= ERAS[i].at) idx = i;
+    return idx;
+  }
+  function eraBonus(state) {
+    var m = 1, idx = eraIndex(state);
+    for (var i = 0; i <= idx; i++) m *= ERAS[i].bonus;
+    return m;
+  }
+  function currentEra(state) { return ERAS[eraIndex(state)]; }
+  function nextEra(state) { var idx = eraIndex(state); return idx + 1 < ERAS.length ? ERAS[idx + 1] : null; }
+
+  // ---- helpers ----
+  function managedTypeCount(state) {
+    var c = 0;
+    for (var i = 0; i < BUSINESSES.length; i++) {
+      var bs = state.businesses[BUSINESSES[i].id];
+      if (bs && bs.manager && bs.owned > 0) c++;
+    }
+    return c;
+  }
+  function totalUnits(state) {
+    var t = 0;
+    for (var i = 0; i < BUSINESSES.length; i++) { var bs = state.businesses[BUSINESSES[i].id]; if (bs) t += bs.owned; }
+    return t;
+  }
+  function insightPerSec(state, innov) {
+    var managers = 0;
+    for (var i = 0; i < BUSINESSES.length; i++) { var bs = state.businesses[BUSINESSES[i].id]; if (bs && bs.manager) managers++; }
+    if (managers <= 0) return 0;
+    var dynBonus = 1 + 0.5 * (state.dynasties || 0);
+    return managers * CONFIG.insightPerManager * (innov ? innov.insightRate : 1) * dynBonus;
+  }
+
+  // Full per-frame derivation. nowMs governs temporary event/boost buffs.
   function derive(state, nowMs) {
     nowMs = nowMs || 0;
     var up = deriveUpgrades(state);
     var board = deriveBoard(state);
     var dyn = deriveDynasty(state);
+    var innov = deriveInnovations(state);
     var ach = achievementMult(state);
     var inv = investorMult(state, board.investorEff);
 
     var boomActive = nowMs < (state.eventBoomUntil || 0);
     var frenzyActive = nowMs < (state.eventFrenzyUntil || 0);
+    var surgeActive = nowMs < (state.boostSurgeUntil || 0);
 
-    var globalProfit = up.allProfit * board.profit * dyn.profit * dyn.legacyProfit * ach * inv;
+    var eIdx = eraIndex(state);
+    var eraMult = eraBonus(state);
+    var synergyMult = 1 + innov.synergy * managedTypeCount(state);
+    var scaleMult = 1 + innov.scale * Math.log10(1 + totalUnits(state));
+
+    var globalProfit = up.allProfit * board.profit * dyn.profit * dyn.legacyProfit * ach * inv
+      * eraMult * synergyMult * scaleMult * innov.profit;
     if (boomActive) globalProfit *= CONFIG.eventBoomMult;
+    if (surgeActive) globalProfit *= CONFIG.boostSurgeMult;
     var globalSpeed = up.allSpeed * board.speed;
     if (frenzyActive) globalSpeed *= CONFIG.eventFrenzyMult;
 
     var revPerCycle = {}, cycleTime = {}, incomePerSec = {};
     var managed = 0, potential = 0;
+    var fr = innov.franchise;
     for (var i = 0; i < BUSINESSES.length; i++) {
       var b = BUSINESSES[i];
       var bs = state.businesses[b.id];
@@ -207,12 +286,17 @@
       incomePerSec[b.id] = ips;
       potential += ips;
       if (bs && bs.manager) managed += ips;
+      else if (owned > 0 && fr > 0) managed += ips * fr; // franchised idle income
     }
 
     return {
-      up: up, board: board, dyn: dyn, ach: ach, inv: inv,
-      boomActive: boomActive, frenzyActive: frenzyActive,
-      globalProfit: globalProfit, globalSpeed: globalSpeed,
+      up: up, board: board, dyn: dyn, innov: innov, ach: ach, inv: inv,
+      boomActive: boomActive, frenzyActive: frenzyActive, surgeActive: surgeActive,
+      eraIndex: eIdx, eraMult: eraMult, synergyMult: synergyMult, scaleMult: scaleMult,
+      globalProfit: globalProfit, globalSpeed: globalSpeed, franchise: fr,
+      offlineCapHours: board.offlineCapHours + innov.offlineCap,
+      offlineEff: Math.max(board.offlineEff, innov.offlineEff),
+      insightPerSec: insightPerSec(state, innov),
       revPerCycle: revPerCycle, cycleTime: cycleTime, incomePerSec: incomePerSec,
       managedIncomePerSec: managed, potentialIncomePerSec: potential
     };
@@ -227,6 +311,7 @@
     if (dt > CONFIG.maxDt) dt = CONFIG.maxDt;
     var earned = 0;
     var perBiz = {};
+    var fr = derived.franchise || 0;
     for (var i = 0; i < BUSINESSES.length; i++) {
       var b = BUSINESSES[i];
       var bs = state.businesses[b.id];
@@ -241,6 +326,14 @@
           var pay = cycles * rev;
           earned += pay; perBiz[b.id] = (perBiz[b.id] || 0) + pay;
         }
+      } else if (fr > 0) { // Franchise Model: un-managed businesses auto-run at fr
+        bs.progress += dt / ct;
+        if (bs.progress >= 1) {
+          var fc = Math.floor(bs.progress);
+          bs.progress -= fc;
+          var fpay = fc * rev * fr;
+          earned += fpay; perBiz[b.id] = (perBiz[b.id] || 0) + fpay;
+        }
       } else if (bs.running) {
         bs.progress += dt / ct;
         if (bs.progress >= 1) {
@@ -251,6 +344,11 @@
       }
     }
     if (earned > 0) creditEarnings(state, earned);
+    if (derived.insightPerSec > 0) { // Insight (R&D) accrues from automation
+      var gi = derived.insightPerSec * dt;
+      state.insight = (state.insight || 0) + gi;
+      state.insightTotal = (state.insightTotal || 0) + gi;
+    }
     return { earned: earned, perBiz: perBiz };
   }
 
@@ -462,15 +560,23 @@
   // Offline earnings
   // ---------------------------------------------------------------------------
   function offlineEarnings(state, seconds, derived) {
-    var capSec = derived.board.offlineCapHours * 3600;
+    var capHours = (derived.offlineCapHours != null) ? derived.offlineCapHours : derived.board.offlineCapHours;
+    var eff = (derived.offlineEff != null) ? derived.offlineEff : derived.board.offlineEff;
+    var capSec = capHours * 3600;
     var used = Math.min(Math.max(0, seconds), capSec);
-    var cash = derived.managedIncomePerSec * used * derived.board.offlineEff;
+    var cash = derived.managedIncomePerSec * used * eff;
     return { cash: cash, seconds: used, capped: seconds > capSec, raw: seconds };
   }
 
   function applyOffline(state, seconds, derived) {
     var r = offlineEarnings(state, seconds, derived);
     creditEarnings(state, r.cash);
+    if (derived.insightPerSec > 0) {
+      var gi = derived.insightPerSec * r.seconds;
+      state.insight = (state.insight || 0) + gi;
+      state.insightTotal = (state.insightTotal || 0) + gi;
+      r.insight = gi;
+    }
     return r;
   }
 
@@ -478,20 +584,22 @@
   // Achievements
   // ---------------------------------------------------------------------------
   function buildAchievementCtx(state) {
-    var totalUnits = 0, managersHired = 0, ownedMax = {};
+    var units = 0, managersHired = 0, ownedMax = {};
     for (var i = 0; i < BUSINESSES.length; i++) {
       var bs = state.businesses[BUSINESSES[i].id];
       var owned = bs ? bs.owned : 0;
-      totalUnits += owned;
+      units += owned;
       ownedMax[BUSINESSES[i].id] = owned;
       if (bs && bs.manager) managersHired++;
     }
+    var innovCount = 0, innov = state.innovations || {};
+    for (var k in innov) if (innov[k]) innovCount++;
     return {
       netWorth: state.earnedAll,
       cash: state.cash,
       earnedRun: state.earnedRun,
       earnedAll: state.earnedAll,
-      totalUnits: totalUnits,
+      totalUnits: units,
       businesses: BUSINESSES,
       managersHired: managersHired,
       ipos: state.ipos || 0,
@@ -501,6 +609,12 @@
       eventsCaught: state.eventsCaught || 0,
       dynasties: state.dynasties || 0,
       legacy: state.legacy || 0,
+      innovations: innovCount,
+      innovationsTotal: INNOVATIONS.length,
+      eraIndex: eraIndex(state),
+      boostsUsed: state.boostsUsed || 0,
+      pinnacle: !!state.pinnacle,
+      insightTotal: state.insightTotal || 0,
       ownedMax: ownedMax
     };
   }
@@ -535,9 +649,90 @@
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // Innovations (R&D) — actions
+  // ---------------------------------------------------------------------------
+  function innovationsUnlocked(state) {
+    if ((state.insightTotal || 0) > 0) return true;
+    var innov = state.innovations || {};
+    for (var k in innov) if (innov[k]) return true;
+    var managers = 0;
+    for (var i = 0; i < BUSINESSES.length; i++) { var bs = state.businesses[BUSINESSES[i].id]; if (bs && bs.manager) managers++; }
+    return managers >= CONFIG.innovationsUnlockManagers;
+  }
+  function isInnovationUnlocked(state, n) {
+    if (!n.req) return true;
+    for (var i = 0; i < n.req.length; i++) if (!(state.innovations && state.innovations[n.req[i]])) return false;
+    return true;
+  }
+  function buyInnovation(state, id) {
+    var n = INNOV_BY_ID[id];
+    if (!n) return false;
+    state.innovations = state.innovations || {};
+    if (state.innovations[id]) return false;
+    if (!isInnovationUnlocked(state, n)) return false;
+    if ((state.insight || 0) < n.cost) return false;
+    state.insight -= n.cost;
+    state.innovations[id] = true;
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Active Boosts
+  // ---------------------------------------------------------------------------
+  function boostsUnlocked(state) { return deriveInnovations(state).boosts; }
+  function boostCooldownLeft(state, id, nowMs) {
+    return Math.max(0, (((state.boostCd && state.boostCd[id]) || 0) - nowMs) / 1000);
+  }
+  function boostReady(state, id, nowMs) {
+    return nowMs >= ((state.boostCd && state.boostCd[id]) || 0);
+  }
+  function activateBoost(state, id, nowMs, derived) {
+    var b = BOOST_BY_ID[id];
+    if (!b) return null;
+    if (!boostsUnlocked(state)) return null;
+    if (!boostReady(state, id, nowMs)) return null;
+    state.boostCd = state.boostCd || {};
+    state.boostCd[id] = nowMs + b.cd * 1000;
+    state.boostsUsed = (state.boostsUsed || 0) + 1;
+    if (b.kind === 'surge') {
+      state.boostSurgeUntil = nowMs + b.dur * 1000;
+      return { kind: 'surge', dur: b.dur };
+    }
+    if (b.kind === 'injection') {
+      var d = derived || derive(state, nowMs);
+      var amount = Math.max(CONFIG.eventWindfallFlatMin, d.managedIncomePerSec * CONFIG.boostInjectionSeconds);
+      creditEarnings(state, amount);
+      return { kind: 'injection', amount: amount };
+    }
+    return { kind: b.kind };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Eras + Pinnacle (phase-shift / win-state)
+  // ---------------------------------------------------------------------------
+  function checkEra(state) {
+    var idx = eraIndex(state);
+    var seen = state.eraSeen || 0;
+    if (idx > seen) { state.eraSeen = idx; return ERAS[idx]; }
+    return null;
+  }
+  function checkPinnacle(state) {
+    if (!state.pinnacle && (state.earnedAll || 0) >= CONFIG.pinnacleEarned) { state.pinnacle = true; return true; }
+    return false;
+  }
+
+  // QoL: seconds until `cost` is affordable at the current income (0 = now, Infinity = never).
+  function timeToAfford(cost, cash, incomePerSec) {
+    if (cash >= cost) return 0;
+    if (incomePerSec <= 0) return Infinity;
+    return (cost - cash) / incomePerSec;
+  }
+
   return {
     // lookups
     BIZ_BY_ID: BIZ_BY_ID, UP_BY_ID: UP_BY_ID, BOARD_BY_ID: BOARD_BY_ID, PERK_BY_ID: PERK_BY_ID,
+    INNOV_BY_ID: INNOV_BY_ID, BOOST_BY_ID: BOOST_BY_ID,
     // costs
     unitCost: unitCost, bulkCost: bulkCost, maxAffordable: maxAffordable,
     // milestones
@@ -563,6 +758,17 @@
     // achievements
     buildAchievementCtx: buildAchievementCtx, checkAchievements: checkAchievements,
     // reveal
-    revealedBusinesses: revealedBusinesses
+    revealedBusinesses: revealedBusinesses,
+    // innovations (R&D)
+    deriveInnovations: deriveInnovations, innovationsUnlocked: innovationsUnlocked,
+    isInnovationUnlocked: isInnovationUnlocked, buyInnovation: buyInnovation,
+    insightPerSec: insightPerSec,
+    // boosts
+    boostsUnlocked: boostsUnlocked, boostReady: boostReady, boostCooldownLeft: boostCooldownLeft, activateBoost: activateBoost,
+    // eras + pinnacle
+    eraIndex: eraIndex, eraBonus: eraBonus, currentEra: currentEra, nextEra: nextEra,
+    checkEra: checkEra, checkPinnacle: checkPinnacle,
+    // qol
+    timeToAfford: timeToAfford, totalUnits: totalUnits, managedTypeCount: managedTypeCount
   };
 });

@@ -9,11 +9,17 @@ for a full-screen, offline app.
 ## Features
 - 10 businesses with managers, milestone multipliers, and dozens of upgrades
 - **The Hustle** — tap to earn, with a combo multiplier
+- **Eras** — a journey from Street Vendor to Cosmic Magnate, each a new chapter
+- **R&D / Innovations** — a slow-burning *Insight* resource spent on a tree of
+  rule-changing unlocks (Franchise Model, Synergy, Economies of Scale, …)
+- **Active Boosts** — Surge & Cash Injection on cooldowns, so late game stays active
 - **IPO / Go Public** (prestige) → permanent Investors + a Boardroom upgrade tree
 - **Dynasty** (deep prestige) → permanent Legacy multipliers
 - **Market Events** — tap floating opportunities for booms, frenzies, and windfalls
-- Achievements with real bonuses, full stats, offline earnings
-- Installable PWA, works offline, autosaves (survives the tab being closed)
+- **The Pinnacle** — a real "you built it" win-state, then keep going forever
+- Achievements with real bonuses, full stats, generous offline earnings
+- Time-to-afford estimates, buy-max, autosave (survives the tab being closed)
+- Installable PWA, works offline
 - Premium "luxury wealth" design — near-black + brushed gold + money-green
 
 ## Tech

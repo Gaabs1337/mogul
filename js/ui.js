@@ -41,7 +41,12 @@
     el.legacyBadge = $('#badge-legacy');
     el.legacyVal = $('#legacy-val');
     el.multVal = $('#mult-val');
+    el.insightBadge = $('#badge-insight');
+    el.insightVal = $('#insight-val');
+    el.eraChip = $('#era-chip');
+    el.tabRnd = $('#tab-rnd');
     el.dotBoard = $('#dot-board');
+    el.dotRnd = $('#dot-rnd');
     el.dotTrophies = $('#dot-trophies');
     el.fx = $('#fx');
     el.toastRoot = $('#toast-root');
@@ -104,6 +109,7 @@
     sci = st.settings.notation === 'scientific';
     if (name === 'empire') buildEmpire(st);
     else if (name === 'upgrades') buildUpgrades(st);
+    else if (name === 'rnd') buildRnd(st);
     else if (name === 'board') buildBoard(st);
     else if (name === 'trophies') buildTrophies(st);
     else if (name === 'settings') buildSettings(st);
@@ -122,6 +128,23 @@
     var panel = el.panels.empire;
     panel.innerHTML = '';
     refs.biz = {};
+    refs.boostBtns = {};
+
+    // active boosts (unlocked via R&D) — kept accessible during play
+    if (G.boostsUnlocked(st)) {
+      var bb = ce('div', 'boost-bar');
+      D.BOOSTS.forEach(function (bo) {
+        var btn = ce('button', 'boost-btn');
+        btn.setAttribute('data-action', 'boost');
+        btn.setAttribute('data-id', bo.id);
+        btn.innerHTML = '<span class="boost-ico">' + bo.icon + '</span>' +
+          '<span class="boost-meta"><b>' + bo.name + '</b><i data-bcd></i></span>' +
+          '<span class="boost-cool" data-bcool></span>';
+        bb.appendChild(btn);
+        refs.boostBtns[bo.id] = { btn: btn, cd: $('[data-bcd]', btn), cool: $('[data-bcool]', btn) };
+      });
+      panel.appendChild(bb);
+    }
 
     var bar = ce('div', 'buyamount');
     [['1', '×1'], ['10', '×10'], ['100', '×100'], ['max', 'MAX']].forEach(function (a) {
@@ -160,7 +183,8 @@
       '<span class="biz-payout" data-payout></span></div>' +
       '<div class="biz-bottom">' +
       '<button class="buy-btn" data-action="buy" data-id="' + b.id + '">' +
-      '<span class="buy-qty" data-qty>×1</span><span class="buy-cost" data-cost></span></button>' +
+      '<span class="buy-qty" data-qty>×1</span><span class="buy-cost" data-cost></span>' +
+      '<span class="buy-eta" data-eta></span></button>' +
       '<button class="mgr-btn" data-action="manager" data-id="' + b.id + '" data-mgr></button>' +
       '</div>';
     card.appendChild(body);
@@ -170,7 +194,7 @@
       owned: $('[data-owned]', art), artfill: $('[data-artfill]', art),
       rate: $('[data-rate]', body), fill: $('[data-fill]', body), payout: $('[data-payout]', body),
       buyBtn: $('.buy-btn', body), qty: $('[data-qty]', body), cost: $('[data-cost]', body),
-      mgrBtn: $('[data-mgr]', body)
+      eta: $('[data-eta]', body), mgrBtn: $('[data-mgr]', body)
     };
     return card;
   }
@@ -183,22 +207,24 @@
         b.classList.toggle('is-on', b.getAttribute('data-amount') === String(st.settings.buyAmount));
       });
     }
+    var fr = d.franchise || 0;
     var revealed = G.revealedBusinesses(st);
     for (var i = 0; i < revealed.length; i++) {
       var b = revealed[i];
       var r = refs.biz[b.id];
       if (!r) continue;
       var bs = st.businesses[b.id];
+      var effRate = bs.manager ? d.incomePerSec[b.id] : (fr > 0 ? d.incomePerSec[b.id] * fr : d.incomePerSec[b.id]);
       r.owned.textContent = num(bs.owned);
-      r.rate.textContent = bs.owned > 0 ? F.rate(d.incomePerSec[b.id], { sci: sci }) : '—';
+      r.rate.textContent = bs.owned > 0 ? F.rate(effRate, { sci: sci }) : '—';
       r.payout.textContent = bs.owned > 0 ? ('+' + money(d.revPerCycle[b.id])) : 'Locked';
 
+      var autoRun = bs.manager || fr > 0;
       var pct = bs.owned > 0 ? Math.min(100, bs.progress * 100) : 0;
       r.fill.style.width = pct + '%';
-      var active = bs.manager || bs.running;
-      r.fill.classList.toggle('is-idle', !active && bs.owned > 0);
+      r.fill.classList.toggle('is-idle', !autoRun && !bs.running && bs.owned > 0);
       r.artfill.style.height = pct + '%';
-      r.art.classList.toggle('runnable', bs.owned > 0 && !bs.manager);
+      r.art.classList.toggle('runnable', bs.owned > 0 && !autoRun);
 
       // buy button
       var amount = st.settings.buyAmount;
@@ -217,6 +243,14 @@
       var affordable = (amount === 'max') ? (qtyN > 0) : (st.cash >= cost);
       r.buyBtn.classList.toggle('cant', !affordable);
 
+      // time-to-afford QoL
+      if (!affordable && amount !== 'max') {
+        var eta = G.timeToAfford(cost, st.cash, d.managedIncomePerSec);
+        r.eta.textContent = (isFinite(eta) && eta > 0) ? ('~' + F.duration(eta)) : '';
+      } else {
+        r.eta.textContent = '';
+      }
+
       // manager
       if (bs.manager) {
         r.mgrBtn.className = 'mgr-btn is-auto';
@@ -229,6 +263,21 @@
       } else {
         r.mgrBtn.className = 'mgr-btn hidden';
         r.mgrBtn.innerHTML = '';
+      }
+    }
+
+    // boost cooldowns
+    if (refs.boostBtns) {
+      var nowMs = ctrl.now();
+      for (var bid in refs.boostBtns) {
+        var ref = refs.boostBtns[bid];
+        var ready = G.boostReady(st, bid, nowMs);
+        var left = G.boostCooldownLeft(st, bid, nowMs);
+        ref.btn.classList.toggle('cooling', !ready);
+        var bo = G.BOOST_BY_ID[bid];
+        ref.cd.textContent = ready ? 'Ready' : F.duration(left);
+        var pct = ready ? 0 : Math.min(100, (left / bo.cd) * 100);
+        ref.cool.style.width = pct + '%';
       }
     }
   }
@@ -284,6 +333,67 @@
       var u = G.UP_BY_ID[id];
       if (!u || !refs.up[id]) continue;
       refs.up[id].buy.classList.toggle('cant', st.cash < u.cost);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // R&D / INNOVATIONS
+  // ---------------------------------------------------------------------------
+  function buildRnd(st) {
+    var panel = el.panels.rnd;
+    panel.innerHTML = '';
+    refs.rnd = {};
+    var d = ctrl.getDerived();
+
+    var hero = ce('div', 'insight-hero');
+    hero.innerHTML =
+      '<div class="ih-top"><span class="ih-ico">💡</span>' +
+      '<div><div class="ih-title">Research &amp; Development</div>' +
+      '<div class="ih-sub">Automated businesses generate Insight — spend it on innovations that change how your empire works.</div></div></div>' +
+      '<div class="ih-stats"><div class="ih-stat"><span class="k">Insight</span><b data-insight>' + num(st.insight) + '</b></div>' +
+      '<div class="ih-stat"><span class="k">Per second</span><b data-insightrate>' + F.scaled(d.insightPerSec) + '/s</b></div></div>';
+    panel.appendChild(hero);
+    refs.rnd.insight = $('[data-insight]', hero);
+    refs.rnd.insightRate = $('[data-insightrate]', hero);
+
+    panel.appendChild(sectionTitle('Innovations', 'change the rules'));
+    var grid = ce('div', 'up-grid');
+    var owned = 0;
+    D.INNOVATIONS.forEach(function (n) {
+      if (st.innovations[n.id]) owned++;
+      grid.appendChild(buildInnovationCard(n, st));
+    });
+    panel.appendChild(grid);
+  }
+
+  function buildInnovationCard(n, st) {
+    var ownedNode = !!st.innovations[n.id];
+    var unlocked = G.isInnovationUnlocked(st, n);
+    var card = ce('div', 'up-card innov-card' + (ownedNode ? ' owned' : '') + (!unlocked ? ' locked' : ''));
+    var req = '';
+    if (!unlocked && n.req) {
+      req = '<div class="up-hint">🔒 Requires: ' + n.req.map(function (r) { return G.INNOV_BY_ID[r] ? G.INNOV_BY_ID[r].name : r; }).join(', ') + '</div>';
+    }
+    card.innerHTML =
+      '<div class="up-ico">' + n.icon + '</div>' +
+      '<div class="up-main"><div class="up-name">' + n.name + '</div>' +
+      '<div class="up-desc">' + n.desc + '</div>' + req + '</div>' +
+      (ownedNode ? '<div class="bn-owned">✓</div>'
+        : (unlocked ? '<button class="up-buy insight-buy" data-action="innovate" data-id="' + n.id + '"><span class="bn-cost">💡 ' + num(n.cost) + '</span></button>'
+          : '<div class="bn-lock">🔒</div>'));
+    if (!ownedNode && unlocked) refs.rnd['n_' + n.id] = $('.insight-buy', card);
+    return card;
+  }
+
+  function updateRnd(st, d) {
+    if (!refs.rnd) return;
+    if (refs.rnd.insight) refs.rnd.insight.textContent = num(st.insight);
+    if (refs.rnd.insightRate) refs.rnd.insightRate.textContent = F.scaled(d.insightPerSec) + '/s';
+    for (var key in refs.rnd) {
+      if (key.indexOf('n_') !== 0) continue;
+      var nid = key.slice(2);
+      var n = G.INNOV_BY_ID[nid];
+      if (n && refs.rnd[key]) refs.rnd[key].classList.toggle('cant', (st.insight || 0) < n.cost);
     }
   }
 
@@ -431,7 +541,9 @@
     var d = ctrl.getDerived();
     var totalUnits = 0, managers = 0;
     D.BUSINESSES.forEach(function (b) { totalUnits += st.businesses[b.id].owned; if (st.businesses[b.id].manager) managers++; });
+    var innovCount = 0; for (var ik in st.innovations) if (st.innovations[ik]) innovCount++;
     var rows = [
+      ['Era', G.currentEra(st).icon + ' ' + G.currentEra(st).name],
       ['Net worth (lifetime)', money(st.earnedAll)],
       ['Cash on hand', money(st.cash)],
       ['Income / sec', F.rate(d.managedIncomePerSec, { sci: sci })],
@@ -442,6 +554,8 @@
       ['IPOs completed', num(st.ipos)],
       ['Legacy', num(st.legacy)],
       ['Dynasties', num(st.dynasties)],
+      ['Insight', num(st.insight) + ' (' + F.scaled(d.insightPerSec) + '/s)'],
+      ['Innovations', innovCount + ' / ' + D.INNOVATIONS.length],
       ['Opportunities caught', num(st.eventsCaught)],
       ['Total taps', num(st.taps)]
     ];
@@ -482,7 +596,7 @@
       'On iPhone: tap the <b>Share</b> icon in Safari, then <b>Add to Home Screen</b> for a full-screen, offline app.'));
     panel.appendChild(inst);
 
-    panel.appendChild(ce('div', 'version', 'MOGUL · v1.0 · made for you'));
+    panel.appendChild(ce('div', 'version', 'MOGUL · v2.0 · made for you'));
   }
 
   function toggleRow(label, key, on) {
@@ -520,7 +634,13 @@
     else displayedCash += (st.cash - displayedCash) * 0.28;
     if (Math.abs(st.cash - displayedCash) < 0.5) displayedCash = st.cash;
     el.networth.textContent = money(displayedCash);
-    el.rate.textContent = F.rate(d.managedIncomePerSec, { sci: sci }) + (d.boomActive ? ' 🚀' : '');
+    var rateExtra = (d.boomActive ? ' 🚀' : '') + (d.surgeActive ? ' ⚡' : '');
+    el.rate.textContent = F.rate(d.managedIncomePerSec, { sci: sci }) + rateExtra;
+
+    // era chip
+    var era = G.currentEra(st);
+    el.eraChip.hidden = false;
+    el.eraChip.textContent = era.icon + '  ' + era.name;
 
     // combo
     if (st.combo > 1 && (ctrl.now() - st.lastTapAt) < D.CONFIG.comboWindow * 1000) {
@@ -533,16 +653,30 @@
     // badges
     setBadge(el.investorsBadge, el.investorsVal, st.investors, st.investors > 0 || st.ipos > 0);
     setBadge(el.legacyBadge, el.legacyVal, st.legacy, st.legacy > 0 || st.dynasties > 0);
+    var rndOpen = G.innovationsUnlocked(st);
+    setBadge(el.insightBadge, el.insightVal, st.insight, rndOpen);
     el.multVal.textContent = F.mult(d.globalProfit);
 
-    // board "you can IPO" dot
-    var canI = G.pendingInvestors(st, d) >= D.CONFIG.ipoMinInvestors;
-    el.dotBoard.hidden = !canI;
+    // reveal R&D tab once unlocked
+    if (el.tabRnd) el.tabRnd.hidden = !rndOpen;
+
+    // attention dots
+    el.dotBoard.hidden = !(G.pendingInvestors(st, d) >= D.CONFIG.ipoMinInvestors);
+    if (el.dotRnd) el.dotRnd.hidden = !(rndOpen && anyInnovationAffordable(st));
 
     // active tab values
     if (activeTab === 'empire') updateEmpire(st, d);
     else if (activeTab === 'upgrades') updateUpgrades(st);
+    else if (activeTab === 'rnd') updateRnd(st, d);
     else if (activeTab === 'board') updateBoard(st, d);
+  }
+
+  function anyInnovationAffordable(st) {
+    for (var i = 0; i < D.INNOVATIONS.length; i++) {
+      var n = D.INNOVATIONS[i];
+      if (!st.innovations[n.id] && G.isInnovationUnlocked(st, n) && (st.insight || 0) >= n.cost) return true;
+    }
+    return false;
   }
 
   function setBadge(badge, valEl, value, show) {
@@ -660,14 +794,39 @@
   }
 
   function offlineModal(data) {
+    var ins = (data.insight > 0) ? ('<div class="offline-insight">+' + F.scaled(data.insight) + ' 💡 Insight</div>') : '';
     modal(
       '<div class="modal-emoji">🌙</div>' +
       '<h2 class="modal-title">Welcome back, Mogul</h2>' +
       '<p class="modal-body">While you were away for <b>' + F.time(data.seconds) + '</b>' +
       (data.capped ? ' <span class="muted">(capped)</span>' : '') +
-      ', your managers earned</p>' +
-      '<div class="offline-amount">+' + money(data.cash) + '</div>' +
+      ', your empire earned</p>' +
+      '<div class="offline-amount">+' + money(data.cash) + '</div>' + ins +
       '<div class="modal-actions"><button class="btn primary wide" data-action="closemodal">Collect</button></div>'
+    );
+  }
+
+  function eraModal(era) {
+    modal(
+      '<div class="era-modal-glow"></div>' +
+      '<div class="modal-emoji big">' + era.icon + '</div>' +
+      '<div class="era-kicker">A NEW ERA</div>' +
+      '<h2 class="modal-title">' + era.name + '</h2>' +
+      '<p class="modal-body">' + era.blurb + '</p>' +
+      (era.bonus > 1 ? '<div class="era-bonus">+' + Math.round((era.bonus - 1) * 100) + '% profit, forever</div>' : '') +
+      '<div class="modal-actions"><button class="btn primary wide" data-action="closemodal">Onward</button></div>'
+    );
+  }
+
+  function pinnacleModal() {
+    modal(
+      '<div class="era-modal-glow"></div>' +
+      '<div class="modal-emoji big">🌌</div>' +
+      '<div class="era-kicker">THE PINNACLE</div>' +
+      '<h2 class="modal-title">You built the ultimate empire</h2>' +
+      '<p class="modal-body">From a single lemonade stand to a force that trades in galaxies. There\'s no higher rung — but the empire is yours to keep growing, forever.</p>' +
+      '<div class="era-bonus">🏆 +50% profit — a monument to what you made</div>' +
+      '<div class="modal-actions"><button class="btn primary wide" data-action="closemodal">Keep building</button></div>'
     );
   }
 
@@ -689,6 +848,7 @@
   root.MOGUL.ui = {
     init: init, render: render, refresh: refresh, invalidate: invalidate, switchTab: switchTab,
     toast: toast, confirmModal: confirmModal, offlineModal: offlineModal, promptModal: promptModal,
+    eraModal: eraModal, pinnacleModal: pinnacleModal,
     closeModal: closeModal, getModalInput: getModalInput,
     floater: floater, burst: burst, hustleFx: hustleFx,
     spawnEventToken: spawnEventToken, catchToken: catchToken,

@@ -53,10 +53,21 @@
       dynasties: 0,
       taps: 0,
       eventsCaught: 0,
+      // R&D / Innovations (non-resetting parallel track)
+      insight: 0,
+      insightTotal: 0,
+      innovations: {},
+      boostsUsed: 0,
+      // Eras + win-state
+      eraSeen: 0,
+      pinnacle: false,
+      // transient buffs/timers (never trusted from disk)
       combo: 0,
       lastTapAt: 0,
       eventBoomUntil: 0,
       eventFrenzyUntil: 0,
+      boostSurgeUntil: 0,
+      boostCd: {},
       nextEventAt: 0,
       createdAt: now(),
       lastSaveAt: now(),
@@ -94,12 +105,18 @@
     d.dynasties = Math.max(0, Math.floor(num(loaded.dynasties, 0)));
     d.taps = Math.max(0, Math.floor(num(loaded.taps, 0)));
     d.eventsCaught = Math.max(0, Math.floor(num(loaded.eventsCaught, 0)));
+    d.insight = Math.max(0, num(loaded.insight, 0));
+    d.insightTotal = Math.max(d.insight, num(loaded.insightTotal, d.insight));
+    d.boostsUsed = Math.max(0, Math.floor(num(loaded.boostsUsed, 0)));
+    d.eraSeen = Math.max(0, Math.min(data.ERAS.length - 1, Math.floor(num(loaded.eraSeen, 0))));
+    d.pinnacle = !!loaded.pinnacle;
     d.createdAt = num(loaded.createdAt, d.createdAt);
     d.lastSaveAt = num(loaded.lastSaveAt, d.lastSaveAt);
 
-    // never trust live combo/event timers from disk
+    // never trust live combo/event/boost timers from disk
     d.combo = 0; d.lastTapAt = 0;
     d.eventBoomUntil = 0; d.eventFrenzyUntil = 0; d.nextEventAt = 0;
+    d.boostSurgeUntil = 0; d.boostCd = {};
 
     if (loaded.businesses) {
       for (var i = 0; i < BUSINESSES.length; i++) {
@@ -119,6 +136,7 @@
     copyFlags(d.board, loaded.board);
     copyFlags(d.achievements, loaded.achievements);
     copyFlags(d.dynastyPerks, loaded.dynastyPerks);
+    copyFlags(d.innovations, loaded.innovations);
 
     if (loaded.settings && typeof loaded.settings === 'object') {
       d.settings.sound = !!loaded.settings.sound;

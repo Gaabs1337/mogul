@@ -1,6 +1,6 @@
 /* MOGUL service worker — offline app shell. Bump CACHE to ship an update. */
 'use strict';
-var CACHE = 'mogul-v1.0.0';
+var CACHE = 'mogul-v2.0.0';
 var ASSETS = [
   './',
   'index.html',

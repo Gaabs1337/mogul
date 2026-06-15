@@ -39,8 +39,8 @@
     investorMultExp: 0.5,           // diminishing returns on the investor multiplier
     ipoMinInvestors: 1,             // need at least this many pending to IPO
 
-    // --- Offline ---
-    offlineCapHours: 8,             // base cap (board can extend)
+    // --- Offline (generous by design — never punish absence) ---
+    offlineCapHours: 12,            // base cap (board + innovations extend it a lot)
     offlineEff: 1.0,                // base efficiency for managed businesses
 
     // --- Events ---
@@ -59,7 +59,22 @@
     dynastyScale: 50000,            // legacy = floor(sqrt(totalInvestorsAll / scale))
     legacyPerBonus: 2,              // global profit ×(1 + 2*legacy): legacy 1 -> ×3
 
-    autoBuyInterval: 1.5            // seconds between auto-buyer purchases (when unlocked)
+    autoBuyInterval: 1.5,           // seconds between auto-buyer purchases (when unlocked)
+
+    // --- Innovations / Insight (R&D — the slow "days" clock + new mechanics) ---
+    insightPerManager: 0.05,        // Insight/sec per hired manager (base)
+    insightEventBonus: 25,          // Insight granted when you catch an Opportunity
+    innovationsUnlockManagers: 1,   // R&D tab appears after hiring this many managers
+
+    // --- Active Boosts (cooldown-gated, unlocked via R&D) ---
+    boostSurgeMult: 8,              // ×profit while Surge is active
+    boostSurgeDur: 25,              // seconds
+    boostSurgeCd: 150,              // cooldown seconds
+    boostInjectionSeconds: 900,     // Cash Injection = this many seconds of income
+    boostInjectionCd: 210,          // cooldown seconds
+
+    // --- Pinnacle (soft-cap / "you won" beat) ---
+    pinnacleEarned: 1e33            // lifetime earnings for the Pinnacle celebration
   };
 
   // ----------------------------------------------------------------------------
@@ -305,7 +320,13 @@
     { id: 'evt25', name: 'Right Place, Right Time', desc: 'Catch 25 Opportunities', icon: '🍀', bonus: 1.06, test: function (c) { return c.eventsCaught >= 25; } },
 
     { id: 'dyn1', name: 'Dynasty', desc: 'Found a Dynasty', icon: '👑', bonus: 1.15, test: function (c) { return c.dynasties >= 1; } },
-    { id: 'legacy5', name: 'House of Mogul', desc: 'Reach 5 Legacy', icon: '🏰', bonus: 1.20, test: function (c) { return c.legacy >= 5; } }
+    { id: 'legacy5', name: 'House of Mogul', desc: 'Reach 5 Legacy', icon: '🏰', bonus: 1.20, test: function (c) { return c.legacy >= 5; } },
+
+    { id: 'innov1', name: 'Visionary', desc: 'Unlock your first Innovation', icon: '💡', bonus: 1.05, test: function (c) { return c.innovations >= 1; } },
+    { id: 'innov_all', name: 'Mad Scientist', desc: 'Unlock every Innovation', icon: '🔬', bonus: 1.25, test: function (c) { return c.innovationsTotal > 0 && c.innovations >= c.innovationsTotal; } },
+    { id: 'era_mid', name: 'Captain of Industry', desc: 'Reach the Industrialist era', icon: '🏭', bonus: 1.08, test: function (c) { return c.eraIndex >= 5; } },
+    { id: 'boost1', name: 'Power Player', desc: 'Trigger an Active Boost', icon: '⚡', bonus: 1.05, test: function (c) { return c.boostsUsed >= 1; } },
+    { id: 'pinnacle', name: 'The Pinnacle', desc: 'Build the ultimate empire', icon: '🌌', bonus: 1.50, test: function (c) { return !!c.pinnacle; } }
   ];
 
   function anyOwned(c, n) {
@@ -313,6 +334,68 @@
     for (var i = 0; i < keys.length; i++) if (c.ownedMax[keys[i]] >= n) return true;
     return false;
   }
+
+  // ----------------------------------------------------------------------------
+  // ERAS — phase-shift beats gated by lifetime earnings. Each entry, once
+  // reached, grants `bonus` to global profit and announces a new chapter.
+  // ----------------------------------------------------------------------------
+  var ERAS = [
+    { id: 'vendor',   name: 'Street Vendor',     icon: '🍋', at: 0,     bonus: 1,    blurb: 'Every empire starts with a single stand. Tap to make your first dollar.' },
+    { id: 'local',    name: 'Local Operator',    icon: '🏪', at: 1e4,   bonus: 1.05, blurb: 'Word is spreading. Your little business is becoming a brand.' },
+    { id: 'citywide', name: 'City Magnate',      icon: '🏙️', at: 1e7,   bonus: 1.10, blurb: 'You own a slice of the skyline now. The city knows your name.' },
+    { id: 'national', name: 'National Mogul',    icon: '🗽', at: 1e10,  bonus: 1.15, blurb: 'Coast to coast. Your logo is on every corner in the country.' },
+    { id: 'global',   name: 'Global Tycoon',     icon: '🌍', at: 1e14,  bonus: 1.20, blurb: 'Continents are just markets. The world runs on your supply chains.' },
+    { id: 'industro', name: 'Industrialist',     icon: '🏭', at: 1e18,  bonus: 1.30, blurb: 'You make the things that make the things. Pure productive power.' },
+    { id: 'space',    name: 'Space Baron',       icon: '🚀', at: 1e23,  bonus: 1.40, blurb: 'Earth was too small. Your rockets mine the asteroid belt now.' },
+    { id: 'cosmic',   name: 'Cosmic Magnate',    icon: '🌌', at: 1e28,  bonus: 1.60, blurb: 'Stars are line items. You trade in the currency of galaxies.' }
+  ];
+
+  // ----------------------------------------------------------------------------
+  // INNOVATIONS — the R&D tree. Bought with Insight. Effects are QUALITATIVE
+  // (they change how the game plays), not just multipliers. Non-resetting track.
+  // effect kinds (applied in game.deriveInnovations):
+  //   franchise(value)   -> unmanaged owned businesses auto-run at `value` efficiency
+  //   synergy(value)     -> +value global profit per managed business type
+  //   scale(value)       -> global profit ×(1 + value*log10(1+totalUnits))
+  //   offline(cap,eff)   -> +cap hours, set offline efficiency to max(.,eff)
+  //   insightRate(value) -> ×value Insight generation
+  //   boosts             -> unlock Active Boosts
+  //   analytics          -> time-to-afford estimates + best-buy highlight
+  //   eventInsight(value)-> +value Insight per Opportunity, events more frequent
+  //   investorInsight(v) -> investors also boost Insight gain
+  //   profit(value)      -> flat global profit multiplier (the spend-sink capstones)
+  // ----------------------------------------------------------------------------
+  var INNOVATIONS = [
+    { id: 'franchise1', name: 'Franchise Pilot',     desc: 'Un-managed businesses run at 25%', icon: '📋', cost: 80,    effect: { kind: 'franchise', value: 0.25 } },
+    { id: 'franchise2', name: 'Franchise Empire',    desc: 'Un-managed businesses run at 60%', icon: '🏢', cost: 4000,  effect: { kind: 'franchise', value: 0.60 }, req: ['franchise1'] },
+
+    { id: 'synergy1',   name: 'Cross-Promotion',     desc: '+4% profit per managed business',  icon: '🔗', cost: 250,   effect: { kind: 'synergy', value: 0.04 } },
+    { id: 'synergy2',   name: 'Vertical Integration', desc: '+8% profit per managed business', icon: '🧬', cost: 9000,  effect: { kind: 'synergy', value: 0.08 }, req: ['synergy1'] },
+
+    { id: 'scale1',     name: 'Economies of Scale',  desc: 'Profit grows with total units owned', icon: '📈', cost: 600,  effect: { kind: 'scale', value: 0.15 } },
+    { id: 'scale2',     name: 'Mass Production',      desc: 'Stronger scaling with units owned',   icon: '⚙️', cost: 20000, effect: { kind: 'scale', value: 0.30 }, req: ['scale1'] },
+
+    { id: 'boosts',     name: 'War Room',            desc: 'Unlock Active Boosts (tap to trigger)', icon: '🎛️', cost: 500,  effect: { kind: 'boosts' } },
+    { id: 'analytics',  name: 'Predictive Analytics', desc: 'Show time-to-afford + best buy',     icon: '🔮', cost: 150,  effect: { kind: 'analytics' } },
+
+    { id: 'offline1',   name: 'Global Operations',   desc: 'Offline cap +24h, 100% efficiency',  icon: '🌐', cost: 350,  effect: { kind: 'offline', cap: 24, eff: 1.0 } },
+    { id: 'offline2',   name: 'Autonomous Empire',   desc: 'Offline cap +48h, 130% efficiency',  icon: '🛰️', cost: 12000, effect: { kind: 'offline', cap: 48, eff: 1.3 }, req: ['offline1'] },
+
+    { id: 'insight1',   name: 'R&D Department',      desc: 'Insight generation ×2',             icon: '🧪', cost: 300,   effect: { kind: 'insightRate', value: 2 } },
+    { id: 'insight2',   name: 'Think Tank',          desc: 'Insight generation ×3',             icon: '🧠', cost: 15000, effect: { kind: 'insightRate', value: 3 }, req: ['insight1'] },
+    { id: 'eventInsight', name: 'Market Intelligence', desc: 'Opportunities appear faster & give Insight', icon: '📡', cost: 1800, effect: { kind: 'eventInsight', value: 50 } },
+
+    { id: 'mega1',      name: 'Megacorporation',     desc: 'All profit ×10',                    icon: '🏛️', cost: 50000,  effect: { kind: 'profit', value: 10 }, req: ['synergy2', 'scale2'] },
+    { id: 'mega2',      name: 'Singularity, Inc.',   desc: 'All profit ×100',                   icon: '✨', cost: 500000, effect: { kind: 'profit', value: 100 }, req: ['mega1'] }
+  ];
+
+  // ----------------------------------------------------------------------------
+  // BOOSTS — player-triggered abilities on cooldowns (unlocked by 'boosts' node).
+  // ----------------------------------------------------------------------------
+  var BOOSTS = [
+    { id: 'surge',     name: 'Surge',          desc: 'Profit ×' + CONFIG.boostSurgeMult + ' for ' + CONFIG.boostSurgeDur + 's', icon: '⚡', kind: 'surge', dur: CONFIG.boostSurgeDur, cd: CONFIG.boostSurgeCd },
+    { id: 'injection', name: 'Cash Injection', desc: 'Instantly bank ' + Math.round(CONFIG.boostInjectionSeconds / 60) + ' min of income', icon: '💉', kind: 'injection', dur: 0, cd: CONFIG.boostInjectionCd }
+  ];
 
   return {
     CONFIG: CONFIG,
@@ -324,6 +407,9 @@
     BOARD: BOARD,
     DYNASTY_PERKS: DYNASTY_PERKS,
     EVENT_TYPES: EVENT_TYPES,
-    ACHIEVEMENTS: ACHIEVEMENTS
+    ACHIEVEMENTS: ACHIEVEMENTS,
+    ERAS: ERAS,
+    INNOVATIONS: INNOVATIONS,
+    BOOSTS: BOOSTS
   };
 });
