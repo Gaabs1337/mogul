@@ -61,6 +61,12 @@
       // Eras + win-state
       eraSeen: 0,
       pinnacle: false,
+      // Challenges (completed = permanent; an in-progress run is not persisted)
+      completedChallenges: {},
+      activeChallenge: null,
+      challengeStartAt: 0,
+      decisionsMade: 0,
+      nextDecisionAt: 0,
       // transient buffs/timers (never trusted from disk)
       combo: 0,
       lastTapAt: 0,
@@ -110,6 +116,8 @@
     d.boostsUsed = Math.max(0, Math.floor(num(loaded.boostsUsed, 0)));
     d.eraSeen = Math.max(0, Math.min(data.ERAS.length - 1, Math.floor(num(loaded.eraSeen, 0))));
     d.pinnacle = !!loaded.pinnacle;
+    d.decisionsMade = Math.max(0, Math.floor(num(loaded.decisionsMade, 0)));
+    // active challenge runs are intentionally not restored (avoids offline/timer edge cases)
     d.createdAt = num(loaded.createdAt, d.createdAt);
     d.lastSaveAt = num(loaded.lastSaveAt, d.lastSaveAt);
 
@@ -137,6 +145,7 @@
     copyFlags(d.achievements, loaded.achievements);
     copyFlags(d.dynastyPerks, loaded.dynastyPerks);
     copyFlags(d.innovations, loaded.innovations);
+    copyFlags(d.completedChallenges, loaded.completedChallenges);
 
     if (loaded.settings && typeof loaded.settings === 'object') {
       d.settings.sound = !!loaded.settings.sound;

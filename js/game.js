@@ -27,6 +27,8 @@
   var INNOVATIONS = data.INNOVATIONS;
   var BOOSTS = data.BOOSTS;
   var ERAS = data.ERAS;
+  var CHALLENGES = data.CHALLENGES;
+  var DECISIONS = data.DECISIONS;
 
   // Quick lookup maps.
   var BIZ_BY_ID = {};
@@ -41,6 +43,10 @@
   INNOVATIONS.forEach(function (n) { INNOV_BY_ID[n.id] = n; });
   var BOOST_BY_ID = {};
   BOOSTS.forEach(function (b) { BOOST_BY_ID[b.id] = b; });
+  var CHALLENGE_BY_ID = {};
+  CHALLENGES.forEach(function (c) { CHALLENGE_BY_ID[c.id] = c; });
+  var DECISION_BY_ID = {};
+  DECISIONS.forEach(function (d) { DECISION_BY_ID[d.id] = d; });
 
   // ---------------------------------------------------------------------------
   // Cost curves
@@ -242,13 +248,54 @@
     return managers * CONFIG.insightPerManager * (innov ? innov.insightRate : 1) * dynBonus;
   }
 
+  // ---- Challenges ----
+  function deriveChallengeRewards(state) {
+    var out = { profit: 1, speed: 1, insightRate: 1, tap: 1 };
+    var done = state.completedChallenges || {};
+    for (var i = 0; i < CHALLENGES.length; i++) {
+      var c = CHALLENGES[i];
+      if (!done[c.id]) continue;
+      var r = c.reward;
+      if (out[r.kind] != null) out[r.kind] *= r.value;
+    }
+    return out;
+  }
+  function challengesUnlocked(state) {
+    return (state.ipos || 0) >= CONFIG.challengesUnlockIpos || (state.activeChallenge != null) ||
+      Object.keys(state.completedChallenges || {}).length > 0;
+  }
+  function activeChallengeDef(state) {
+    return state.activeChallenge ? CHALLENGE_BY_ID[state.activeChallenge] : null;
+  }
+  function activeRestriction(state) {
+    var def = activeChallengeDef(state);
+    return def ? def.restriction : null;
+  }
+  function challengesDoneCount(state) {
+    var n = 0, done = state.completedChallenges || {};
+    for (var k in done) if (done[k]) n++;
+    return n;
+  }
+  function bizAllowed(state, id) {
+    var restr = activeRestriction(state);
+    if (restr && restr.maxBiz != null) {
+      var b = BIZ_BY_ID[id];
+      return !!b && b._index < restr.maxBiz;
+    }
+    return true;
+  }
+
   // Full per-frame derivation. nowMs governs temporary event/boost buffs.
   function derive(state, nowMs) {
     nowMs = nowMs || 0;
+    var restr = activeRestriction(state);
     var up = deriveUpgrades(state);
+    if (restr && restr.noUpgrades) up = { allProfit: 1, allSpeed: 1, tap: 1, biz: {} };
     var board = deriveBoard(state);
     var dyn = deriveDynasty(state);
     var innov = deriveInnovations(state);
+    if (restr && restr.noInnovations) innov = deriveInnovations({ innovations: {} });
+    var chal = deriveChallengeRewards(state);
     var ach = achievementMult(state);
     var inv = investorMult(state, board.investorEff);
 
@@ -262,15 +309,15 @@
     var scaleMult = 1 + innov.scale * Math.log10(1 + totalUnits(state));
 
     var globalProfit = up.allProfit * board.profit * dyn.profit * dyn.legacyProfit * ach * inv
-      * eraMult * synergyMult * scaleMult * innov.profit;
+      * eraMult * synergyMult * scaleMult * innov.profit * chal.profit;
     if (boomActive) globalProfit *= CONFIG.eventBoomMult;
     if (surgeActive) globalProfit *= CONFIG.boostSurgeMult;
-    var globalSpeed = up.allSpeed * board.speed;
+    var globalSpeed = up.allSpeed * board.speed * chal.speed;
     if (frenzyActive) globalSpeed *= CONFIG.eventFrenzyMult;
 
     var revPerCycle = {}, cycleTime = {}, incomePerSec = {};
     var managed = 0, potential = 0;
-    var fr = innov.franchise;
+    var fr = (restr && restr.noManagers) ? 0 : innov.franchise; // Bootstrapped disables Franchise too
     for (var i = 0; i < BUSINESSES.length; i++) {
       var b = BUSINESSES[i];
       var bs = state.businesses[b.id];
@@ -290,13 +337,13 @@
     }
 
     return {
-      up: up, board: board, dyn: dyn, innov: innov, ach: ach, inv: inv,
+      up: up, board: board, dyn: dyn, innov: innov, ach: ach, inv: inv, chal: chal, restr: restr,
       boomActive: boomActive, frenzyActive: frenzyActive, surgeActive: surgeActive,
       eraIndex: eIdx, eraMult: eraMult, synergyMult: synergyMult, scaleMult: scaleMult,
       globalProfit: globalProfit, globalSpeed: globalSpeed, franchise: fr,
       offlineCapHours: board.offlineCapHours + innov.offlineCap,
       offlineEff: Math.max(board.offlineEff, innov.offlineEff),
-      insightPerSec: insightPerSec(state, innov),
+      insightPerSec: insightPerSec(state, innov) * chal.insightRate,
       revPerCycle: revPerCycle, cycleTime: cycleTime, incomePerSec: incomePerSec,
       managedIncomePerSec: managed, potentialIncomePerSec: potential
     };
@@ -367,6 +414,7 @@
   function buyBusiness(state, id, qty) {
     var b = BIZ_BY_ID[id];
     if (!b) return { bought: 0, spent: 0 };
+    if (!bizAllowed(state, id)) return { bought: 0, spent: 0 };
     var bs = state.businesses[id];
     var n = (qty === 'max') ? maxAffordable(b, bs.owned, state.cash) : Math.floor(qty);
     if (n <= 0) return { bought: 0, spent: 0 };
@@ -384,6 +432,8 @@
   function canManage(state, id) {
     var b = BIZ_BY_ID[id];
     var bs = state.businesses[id];
+    var restr = activeRestriction(state);
+    if (restr && restr.noManagers) return false;
     return b && bs && !bs.manager && bs.owned > 0 && state.cash >= b.managerCost;
   }
 
@@ -417,6 +467,8 @@
   function buyUpgrade(state, id) {
     var u = UP_BY_ID[id];
     if (!u || state.upgrades[id]) return false;
+    var restr0 = activeRestriction(state);
+    if (restr0 && restr0.noUpgrades) return false;
     if (!isUpgradeUnlocked(state, u)) return false;
     if (state.cash < u.cost) return false;
     state.cash -= u.cost;
@@ -466,7 +518,8 @@
 
   function hustleValue(state, derived) {
     var base = CONFIG.hustleBase + derived.potentialIncomePerSec * CONFIG.hustleIncomeFrac;
-    return base * derived.up.tap * comboMult(state);
+    var tapMult = derived.up.tap * (derived.chal ? derived.chal.tap : 1);
+    return base * tapMult * comboMult(state);
   }
 
   function tap(state, derived, nowMs) {
@@ -615,6 +668,8 @@
       boostsUsed: state.boostsUsed || 0,
       pinnacle: !!state.pinnacle,
       insightTotal: state.insightTotal || 0,
+      challengesDone: challengesDoneCount(state),
+      challengesTotal: CHALLENGES.length,
       ownedMax: ownedMax
     };
   }
@@ -638,7 +693,9 @@
   // ---------------------------------------------------------------------------
   function revealedBusinesses(state) {
     var out = [];
-    for (var i = 0; i < BUSINESSES.length; i++) {
+    var restr = activeRestriction(state);
+    var cap = (restr && restr.maxBiz != null) ? restr.maxBiz : BUSINESSES.length;
+    for (var i = 0; i < BUSINESSES.length && i < cap; i++) {
       var b = BUSINESSES[i];
       var bs = state.businesses[b.id];
       var prev = i > 0 ? state.businesses[BUSINESSES[i - 1].id] : null;
@@ -668,6 +725,8 @@
   function buyInnovation(state, id) {
     var n = INNOV_BY_ID[id];
     if (!n) return false;
+    var restr1 = activeRestriction(state);
+    if (restr1 && restr1.noInnovations) return false;
     state.innovations = state.innovations || {};
     if (state.innovations[id]) return false;
     if (!isInnovationUnlocked(state, n)) return false;
@@ -706,6 +765,74 @@
       return { kind: 'injection', amount: amount };
     }
     return { kind: b.kind };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Challenges — actions
+  // ---------------------------------------------------------------------------
+  function enterChallenge(state, id, nowMs) {
+    if (state.activeChallenge) return false;
+    var def = CHALLENGE_BY_ID[id];
+    if (!def || !challengesUnlocked(state)) return false;
+    if (state.completedChallenges && state.completedChallenges[id]) return false;
+    state.activeChallenge = id;
+    state.challengeStartAt = nowMs;
+    var dyn = deriveDynasty(state);
+    resetEmpire(state, { dyn: { startCash: dyn.startCash, keepManagers: false }, board: { keepManagers: false } });
+    return true;
+  }
+  function abandonChallenge(state) {
+    if (!state.activeChallenge) return false;
+    state.activeChallenge = null;
+    state.challengeStartAt = 0;
+    resetEmpire(state, { dyn: deriveDynasty(state), board: deriveBoard(state) });
+    return true;
+  }
+  function challengeTimeLeft(state, nowMs) {
+    var def = activeChallengeDef(state);
+    if (!def || def.restriction.timeLimit == null) return null;
+    var start = state.challengeStartAt != null ? state.challengeStartAt : nowMs;
+    return Math.max(0, def.restriction.timeLimit - (nowMs - start) / 1000);
+  }
+  // Called each tick while a challenge is active. Returns {status, def} or null.
+  function checkChallenge(state, nowMs) {
+    var def = activeChallengeDef(state);
+    if (!def) return null;
+    if ((state.earnedRun || 0) >= def.goal) {
+      state.completedChallenges = state.completedChallenges || {};
+      state.completedChallenges[def.id] = true;
+      state.activeChallenge = null; state.challengeStartAt = 0;
+      resetEmpire(state, { dyn: deriveDynasty(state), board: deriveBoard(state) });
+      return { status: 'completed', def: def };
+    }
+    var start = state.challengeStartAt != null ? state.challengeStartAt : nowMs;
+    if (def.restriction.timeLimit != null && (nowMs - start) / 1000 > def.restriction.timeLimit) {
+      state.activeChallenge = null; state.challengeStartAt = 0;
+      resetEmpire(state, { dyn: deriveDynasty(state), board: deriveBoard(state) });
+      return { status: 'failed', def: def };
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boardroom Decisions
+  // ---------------------------------------------------------------------------
+  function pickDecision() { return DECISIONS[Math.floor(Math.random() * DECISIONS.length)]; }
+  function applyDecision(state, decisionId, optionIndex, derived, nowMs) {
+    var d = DECISION_BY_ID[decisionId]; if (!d) return null;
+    var opt = d.options[optionIndex]; if (!opt) return null;
+    var e = opt.effect, res = { label: opt.label };
+    if (e.kind === 'spendSurge') { var sp = state.cash * e.pct; state.cash -= sp; state.boostSurgeUntil = nowMs + e.seconds * 1000; res.spend = sp; res.surge = e.seconds; }
+    else if (e.kind === 'spendFrenzy') { var sp2 = state.cash * e.pct; state.cash -= sp2; state.eventFrenzyUntil = nowMs + e.seconds * 1000; res.spend = sp2; res.frenzy = e.seconds; }
+    else if (e.kind === 'surge') { state.boostSurgeUntil = nowMs + e.seconds * 1000; res.surge = e.seconds; }
+    else if (e.kind === 'frenzy') { state.eventFrenzyUntil = nowMs + e.seconds * 1000; res.frenzy = e.seconds; }
+    else if (e.kind === 'windfall') { var base = Math.max(derived.managedIncomePerSec, derived.potentialIncomePerSec * 0.5); var amt = Math.max(CONFIG.eventWindfallFlatMin, base * e.seconds); creditEarnings(state, amt); res.cash = amt; }
+    else if (e.kind === 'insight') {
+      if (innovationsUnlocked(state)) { state.insight = (state.insight || 0) + e.mult; state.insightTotal = (state.insightTotal || 0) + e.mult; res.insight = e.mult; }
+      else { var w = Math.max(CONFIG.eventWindfallFlatMin, derived.managedIncomePerSec * 120); creditEarnings(state, w); res.cash = w; }
+    }
+    state.decisionsMade = (state.decisionsMade || 0) + 1;
+    return res;
   }
 
   // ---------------------------------------------------------------------------
@@ -768,6 +895,14 @@
     // eras + pinnacle
     eraIndex: eraIndex, eraBonus: eraBonus, currentEra: currentEra, nextEra: nextEra,
     checkEra: checkEra, checkPinnacle: checkPinnacle,
+    // challenges
+    CHALLENGE_BY_ID: CHALLENGE_BY_ID, deriveChallengeRewards: deriveChallengeRewards,
+    challengesUnlocked: challengesUnlocked, activeChallengeDef: activeChallengeDef,
+    activeRestriction: activeRestriction, challengesDoneCount: challengesDoneCount,
+    enterChallenge: enterChallenge, abandonChallenge: abandonChallenge,
+    challengeTimeLeft: challengeTimeLeft, checkChallenge: checkChallenge,
+    // decisions
+    DECISION_BY_ID: DECISION_BY_ID, pickDecision: pickDecision, applyDecision: applyDecision,
     // qol
     timeToAfford: timeToAfford, totalUnits: totalUnits, managedTypeCount: managedTypeCount
   };

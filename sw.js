@@ -1,6 +1,6 @@
 /* MOGUL service worker — offline app shell. Bump CACHE to ship an update. */
 'use strict';
-var CACHE = 'mogul-v2.0.0';
+var CACHE = 'mogul-v3.0.0';
 var ASSETS = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ var ASSETS = [
   'js/state.js',
   'js/game.js',
   'js/audio.js',
+  'js/skyline.js',
   'js/ui.js',
   'js/main.js',
   'fonts/fraunces.woff2',

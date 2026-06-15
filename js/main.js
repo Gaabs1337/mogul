@@ -16,6 +16,7 @@
   var lastAchCheck = 0;
   var lastAutoBuy = 0;
   var nextEventAt = 0;
+  var nextDecisionAt = 0;
   var offlineResult = null;
   var rndAnnounced = false;
 
@@ -49,7 +50,9 @@
       now: now,
       onAction: onAction
     };
+    if (root.MOGUL.skyline) root.MOGUL.skyline.init(controller); // before UI.init (buildEmpire attaches the skyline)
     UI.init(controller);
+    window.addEventListener('resize', function () { if (root.MOGUL.skyline) root.MOGUL.skyline.resize(); });
     // Dev/test hooks only on localhost — production ships clean (no cheat surface).
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '') {
       root.MOGUL.dev = {
@@ -73,6 +76,7 @@
 
     var t0 = now();
     nextEventAt = t0 + rand(D.CONFIG.eventMinGap, D.CONFIG.eventMaxGap) * 1000;
+    nextDecisionAt = t0 + rand(D.CONFIG.decisionMinGap, D.CONFIG.decisionMaxGap) * 1000;
     lastSimPerf = perf();
     lastWall = t0; lastSave = t0; lastAchCheck = t0; lastAutoBuy = t0;
     requestAnimationFrame(renderLoop);   // smooth visuals (paused when hidden)
@@ -110,13 +114,33 @@
       }
       // phase-shift beats
       var newEra = G.checkEra(state);
-      if (newEra) { A.play('ipo'); UI.eraModal(newEra); }
-      else if (G.checkPinnacle(state)) { A.play('ipo'); UI.pinnacleModal(); }
+      if (newEra) { A.play('ipo'); UI.flash(); UI.goldRain(40); UI.eraModal(newEra); }
+      else if (G.checkPinnacle(state)) { A.play('ipo'); UI.flash(); UI.goldRain(120); UI.pinnacleModal(); }
       // R&D unlock moment
       if (!rndAnnounced && G.innovationsUnlocked(state)) {
         rndAnnounced = true;
         UI.toast('💡 R&D unlocked — your managers now generate Insight.', 'gold');
         flashDot('dot-rnd');
+      }
+      // challenge resolution
+      var chalRes = G.checkChallenge(state, t);
+      if (chalRes) {
+        derived = G.derive(state, t);
+        if (chalRes.status === 'completed') { A.play('ipo'); G.checkAchievements(state); celebrate(chalRes.def.icon, 'Challenge complete!'); UI.challengeResultModal(chalRes.def, true); }
+        else { A.play('error'); UI.challengeResultModal(chalRes.def, false); }
+        if (currentTabIs('empire')) UI.invalidate('empire');
+        if (currentTabIs('board')) UI.invalidate('board');
+      }
+    }
+
+    // boardroom decisions (periodic strategic choices)
+    if (t >= nextDecisionAt) {
+      var eligible = (state.ipos >= 1 || G.innovationsUnlocked(state)) && !state.activeChallenge && !isModalOpen() && !document.hidden;
+      if (eligible) {
+        UI.decisionModal(G.pickDecision());
+        nextDecisionAt = t + rand(D.CONFIG.decisionMinGap, D.CONFIG.decisionMaxGap) * 1000;
+      } else {
+        nextDecisionAt = t + 20000; // retry soon when conditions clear
       }
     }
 
@@ -150,6 +174,7 @@
 
   function saveNow() { if (state) S.save(state); }
   function currentTabIs(name) { var pnl = document.querySelector('.tab-panel[data-panel="' + name + '"]'); return pnl && !pnl.hidden; }
+  function isModalOpen() { try { return UI.modalRoot().classList.contains('open'); } catch (e) { return false; } }
   function flashDot(id) { var d = document.getElementById(id); if (d) d.hidden = false; }
 
   // ---------------------------------------------------------------------------
@@ -221,6 +246,36 @@
         state.settings.buyAmount = a;
         break;
       }
+      case 'enterchal': {
+        if (G.enterChallenge(state, p.id, now())) {
+          derived = G.derive(state, now());
+          A.play('manager');
+          var cd = G.CHALLENGE_BY_ID[p.id];
+          UI.toast('🎯 Challenge started: ' + (cd ? cd.name : ''), 'gold');
+          UI.switchTab('empire', true);
+        } else A.play('error');
+        break;
+      }
+      case 'abandonchal': {
+        UI.confirmModal({
+          emoji: '🏳️', title: 'Abandon Challenge?', body: 'Your empire is restored to a normal run. No reward — but no loss either.',
+          confirm: 'Abandon', cancel: 'Keep going',
+          onConfirm: function () { G.abandonChallenge(state); derived = G.derive(state, now()); UI.switchTab('empire', true); }
+        });
+        break;
+      }
+      case 'decision': {
+        var res = G.applyDecision(state, p.id, parseInt(p.el.getAttribute('data-opt'), 10), derived, now());
+        UI.closeModal();
+        if (res) {
+          A.play('event');
+          if (res.cash) UI.toast('💵 +' + F.money(res.cash), 'gold');
+          else if (res.insight) UI.toast('💡 +' + F.scaled(res.insight) + ' Insight', 'gold');
+          else if (res.surge) UI.toast('⚡ Surge for ' + res.surge + 's!', 'gold');
+          else if (res.frenzy) UI.toast('🏎️ Frenzy for ' + res.frenzy + 's!', 'gold');
+        }
+        break;
+      }
       case 'ipo': doIPO(); break;
       case 'dynasty': doDynasty(); break;
       case 'set': onSetting(p.key, p.val); break;
@@ -290,8 +345,10 @@
   function celebrate(emoji, msg) {
     UI.toast(emoji + ' ' + msg, 'gold');
     var cx = window.innerWidth / 2, cy = window.innerHeight * 0.4;
-    UI.burst(cx, cy, 28, '#f3c969');
-    UI.burst(cx, cy, 20, '#7Cf5b0');
+    UI.flash();
+    UI.burst(cx, cy, 30, '#f3c969');
+    UI.burst(cx, cy, 22, '#86f7bd');
+    UI.goldRain(54);
   }
 
   // ---------------------------------------------------------------------------

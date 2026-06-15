@@ -8,7 +8,12 @@ for a full-screen, offline app.
 
 ## Features
 - 10 businesses with managers, milestone multipliers, and dozens of upgrades
+- **A living skyline** — an animated cityscape that grows with your empire and
+  shifts through the eras (dawn → day → dusk → starlit deep space)
 - **The Hustle** — tap to earn, with a combo multiplier
+- **Challenges** — opt-in restricted runs (Bootstrapped, Lean, Frugal, Blitz…)
+  for permanent rewards
+- **Boardroom Decisions** — periodic strategic choices with real trade-offs
 - **Eras** — a journey from Street Vendor to Cosmic Magnate, each a new chapter
 - **R&D / Innovations** — a slow-burning *Insight* resource spent on a tree of
   rule-changing unlocks (Franchise Model, Synergy, Economies of Scale, …)

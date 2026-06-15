@@ -74,7 +74,14 @@
     boostInjectionCd: 210,          // cooldown seconds
 
     // --- Pinnacle (soft-cap / "you won" beat) ---
-    pinnacleEarned: 1e33            // lifetime earnings for the Pinnacle celebration
+    pinnacleEarned: 1e33,           // lifetime earnings for the Pinnacle celebration
+
+    // --- Challenges (restricted runs for permanent rewards) ---
+    challengesUnlockIpos: 2,        // Challenges appear after this many IPOs
+
+    // --- Boardroom Decisions (periodic strategic choices) ---
+    decisionMinGap: 240,            // seconds between decision offers
+    decisionMaxGap: 420
   };
 
   // ----------------------------------------------------------------------------
@@ -326,6 +333,8 @@
     { id: 'innov_all', name: 'Mad Scientist', desc: 'Unlock every Innovation', icon: '🔬', bonus: 1.25, test: function (c) { return c.innovationsTotal > 0 && c.innovations >= c.innovationsTotal; } },
     { id: 'era_mid', name: 'Captain of Industry', desc: 'Reach the Industrialist era', icon: '🏭', bonus: 1.08, test: function (c) { return c.eraIndex >= 5; } },
     { id: 'boost1', name: 'Power Player', desc: 'Trigger an Active Boost', icon: '⚡', bonus: 1.05, test: function (c) { return c.boostsUsed >= 1; } },
+    { id: 'chal1', name: 'Against the Odds', desc: 'Complete a Challenge', icon: '🎯', bonus: 1.08, test: function (c) { return c.challengesDone >= 1; } },
+    { id: 'chal_all', name: 'Undefeated', desc: 'Complete every Challenge', icon: '🥇', bonus: 1.30, test: function (c) { return c.challengesTotal > 0 && c.challengesDone >= c.challengesTotal; } },
     { id: 'pinnacle', name: 'The Pinnacle', desc: 'Build the ultimate empire', icon: '🌌', bonus: 1.50, test: function (c) { return !!c.pinnacle; } }
   ];
 
@@ -397,6 +406,63 @@
     { id: 'injection', name: 'Cash Injection', desc: 'Instantly bank ' + Math.round(CONFIG.boostInjectionSeconds / 60) + ' min of income', icon: '💉', kind: 'injection', dur: 0, cd: CONFIG.boostInjectionCd }
   ];
 
+  // ----------------------------------------------------------------------------
+  // CHALLENGES — opt-in restricted runs. Entering resets the current run and
+  // applies a restriction; hit the goal (this run's earnings) to bank a
+  // permanent reward. Meta progress (investors/board/innovations/eras) stays.
+  //   restriction: { noManagers? noUpgrades? noInnovations? maxBiz? timeLimit? }
+  //   reward: { kind:'profit'|'speed'|'insightRate'|'tap', value }
+  // ----------------------------------------------------------------------------
+  var CHALLENGES = [
+    { id: 'solo',   name: 'Solo Act',     icon: '🎯', desc: 'Only your Lemonade Stand is available.', restriction: { maxBiz: 1 }, goal: 1e7,  reward: { kind: 'tap', value: 10 }, rewardDesc: 'Tap value ×10, forever' },
+    { id: 'lean',   name: 'Lean Startup', icon: '📉', desc: 'Only your first 3 businesses are available.', restriction: { maxBiz: 3 }, goal: 1e8, reward: { kind: 'insightRate', value: 2 }, rewardDesc: 'Insight ×2, forever' },
+    { id: 'boot',   name: 'Bootstrapped', icon: '🥾', desc: 'No managers and no Franchise — run it by hand.', restriction: { noManagers: true }, goal: 1e8, reward: { kind: 'profit', value: 2 }, rewardDesc: 'All profit ×2, forever' },
+    { id: 'frugal', name: 'Frugal',       icon: '🪙', desc: 'Cash upgrades are disabled this run.', restriction: { noUpgrades: true }, goal: 1e9, reward: { kind: 'speed', value: 1.5 }, rewardDesc: 'All speed ×1.5, forever' },
+    { id: 'blitz',  name: 'Blitz',        icon: '⚡', desc: 'Reach the goal within 4 minutes.', restriction: { timeLimit: 240 }, goal: 1e9, reward: { kind: 'profit', value: 2.5 }, rewardDesc: 'All profit ×2.5, forever' },
+    { id: 'purist', name: 'Purist',       icon: '🧘', desc: 'Innovations are disabled this run.', restriction: { noInnovations: true }, goal: 1e10, reward: { kind: 'profit', value: 3 }, rewardDesc: 'All profit ×3, forever' }
+  ];
+
+  // ----------------------------------------------------------------------------
+  // BOARDROOM DECISIONS — periodic strategic choice cards (real trade-offs).
+  // Each option has an effect applied immediately. Pure-data; logic in game.js.
+  //   effect kinds: cashPct(+/-fraction of cash), surge(seconds), frenzy(seconds),
+  //   insight(flat), windfall(seconds of income), profitRun (none persistent)
+  // ----------------------------------------------------------------------------
+  var DECISIONS = [
+    {
+      id: 'expansion', icon: '🏗️', title: 'Aggressive Expansion?',
+      body: 'The board wants to pour the war chest into growth.',
+      options: [
+        { label: 'Go all in', desc: 'Spend 40% of cash → Surge (×profit) 45s', effect: { kind: 'spendSurge', pct: 0.4, seconds: 45 } },
+        { label: 'Stay lean', desc: 'Keep the cash, +a windfall instead', effect: { kind: 'windfall', seconds: 120 } }
+      ]
+    },
+    {
+      id: 'rival', icon: '🤝', title: 'A Rival Comes Knocking',
+      body: 'A competitor offers a fat cheque for a stake in your empire.',
+      options: [
+        { label: 'Take the cash', desc: 'Instant windfall (5 min of income)', effect: { kind: 'windfall', seconds: 300 } },
+        { label: 'Buy them out', desc: 'Spend 25% cash → Frenzy (×speed) 45s', effect: { kind: 'spendFrenzy', pct: 0.25, seconds: 45 } }
+      ]
+    },
+    {
+      id: 'research', icon: '🔬', title: 'Skunkworks Proposal',
+      body: 'Your R&D lead has a wild idea that needs funding.',
+      options: [
+        { label: 'Fund it', desc: 'A burst of Insight now', effect: { kind: 'insight', mult: 600 } },
+        { label: 'Cash bonus', desc: 'Take a windfall (2 min) instead', effect: { kind: 'windfall', seconds: 120 } }
+      ]
+    },
+    {
+      id: 'press', icon: '📰', title: 'Press Frenzy',
+      body: 'You\'re on every front page. Ride the wave?',
+      options: [
+        { label: 'Marketing blitz', desc: 'Surge (×profit) for 60s', effect: { kind: 'surge', seconds: 60 } },
+        { label: 'Speed campaign', desc: 'Frenzy (×speed) for 60s', effect: { kind: 'frenzy', seconds: 60 } }
+      ]
+    }
+  ];
+
   return {
     CONFIG: CONFIG,
     BUSINESSES: BUSINESSES,
@@ -410,6 +476,8 @@
     ACHIEVEMENTS: ACHIEVEMENTS,
     ERAS: ERAS,
     INNOVATIONS: INNOVATIONS,
-    BOOSTS: BOOSTS
+    BOOSTS: BOOSTS,
+    CHALLENGES: CHALLENGES,
+    DECISIONS: DECISIONS
   };
 });

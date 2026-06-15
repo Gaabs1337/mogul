@@ -17,6 +17,8 @@
   var displayedCash = 0; // lerped header value
   var sci = false;       // notation
   var lastRevealCount = 0;
+  var sparkData = [];    // net-worth (log) samples for the header sparkline
+  var sparkLastSample = 0;
 
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function ce(tag, cls, html) {
@@ -44,6 +46,7 @@
     el.insightBadge = $('#badge-insight');
     el.insightVal = $('#insight-val');
     el.eraChip = $('#era-chip');
+    el.spark = $('#spark');
     el.tabRnd = $('#tab-rnd');
     el.dotBoard = $('#dot-board');
     el.dotRnd = $('#dot-rnd');
@@ -129,6 +132,15 @@
     panel.innerHTML = '';
     refs.biz = {};
     refs.boostBtns = {};
+
+    // living skyline — your empire, visible and growing
+    var sky = ce('div', 'skyline-wrap');
+    sky.innerHTML = '<canvas class="skyline" id="skyline"></canvas><div class="skyline-fade"></div>';
+    panel.appendChild(sky);
+    if (root.MOGUL.skyline) root.MOGUL.skyline.attach($('#skyline', sky));
+
+    // active challenge banner (if a Challenge run is in progress)
+    if (G.activeChallengeDef && G.activeChallengeDef(st)) panel.appendChild(buildChallengeBanner(st));
 
     // active boosts (unlocked via R&D) — kept accessible during play
     if (G.boostsUnlocked(st)) {
@@ -280,6 +292,34 @@
         ref.cool.style.width = pct + '%';
       }
     }
+
+    // challenge banner progress
+    if (refs.chalBanner) {
+      var def = G.activeChallengeDef(st);
+      if (def) {
+        var prog = Math.min(100, (st.earnedRun / def.goal) * 100);
+        refs.chalBanner.fill.style.width = prog + '%';
+        var lbl = money(st.earnedRun) + ' / ' + money(def.goal);
+        var tl = G.challengeTimeLeft(st, ctrl.now());
+        if (tl != null) lbl += '  ·  ⏱ ' + F.duration(tl);
+        refs.chalBanner.label.textContent = lbl;
+      }
+    }
+  }
+
+  function buildChallengeBanner(st) {
+    var def = G.activeChallengeDef(st);
+    var wrap = ce('div', 'chal-banner');
+    wrap.innerHTML =
+      '<div class="cb-top"><span class="cb-ico">' + def.icon + '</span>' +
+      '<div class="cb-main"><div class="cb-name">' + def.name + ' · Challenge</div>' +
+      '<div class="cb-desc">' + def.desc + '</div></div>' +
+      '<button class="cb-abandon" data-action="abandonchal">Abandon</button></div>' +
+      '<div class="cb-progress"><div class="cb-fill" data-cbfill></div></div>' +
+      '<div class="cb-label" data-cblabel></div>' +
+      '<div class="cb-reward">Reward: ' + def.rewardDesc + '</div>';
+    refs.chalBanner = { fill: $('[data-cbfill]', wrap), label: $('[data-cblabel]', wrap) };
+    return wrap;
   }
 
   // ---------------------------------------------------------------------------
@@ -443,6 +483,38 @@
         ' total investors earned.<br><span class="muted">Earned so far: ' + num(st.investorsAllTime) + '</span>';
       panel.appendChild(locked);
     }
+
+    // Challenges
+    if (G.challengesUnlocked(st)) {
+      panel.appendChild(buildChallenges(st));
+    }
+  }
+
+  function buildChallenges(st) {
+    var wrap = ce('div', 'challenges');
+    var done = G.challengesDoneCount(st);
+    wrap.appendChild(sectionTitle('Challenges', done + ' / ' + D.CHALLENGES.length));
+    var active = G.activeChallengeDef(st);
+    if (active) {
+      wrap.appendChild(ce('div', 'chal-note', 'A Challenge is in progress — finish or abandon it on the Empire tab first.'));
+    }
+    var grid = ce('div', 'board-grid');
+    D.CHALLENGES.forEach(function (c) {
+      var isDone = !!(st.completedChallenges && st.completedChallenges[c.id]);
+      var isActive = st.activeChallenge === c.id;
+      var card = ce('div', 'board-node chal-node' + (isDone ? ' owned' : '') + (isActive ? ' active' : ''));
+      card.innerHTML =
+        '<div class="bn-ico">' + c.icon + '</div>' +
+        '<div class="bn-main"><div class="bn-name">' + c.name + '</div>' +
+        '<div class="bn-desc">' + c.desc + '</div>' +
+        '<div class="chal-reward-line">🎁 ' + c.rewardDesc + '  ·  goal ' + money(c.goal) + '</div></div>' +
+        (isDone ? '<div class="bn-owned">✓</div>'
+          : (isActive ? '<div class="chal-running">●</div>'
+            : '<button class="bn-buy chal-enter" data-action="enterchal" data-id="' + c.id + '"' + (active ? ' disabled' : '') + '>Start</button>'));
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    return wrap;
   }
 
   function buildBoardNode(n, st) {
@@ -596,7 +668,7 @@
       'On iPhone: tap the <b>Share</b> icon in Safari, then <b>Add to Home Screen</b> for a full-screen, offline app.'));
     panel.appendChild(inst);
 
-    panel.appendChild(ce('div', 'version', 'MOGUL · v2.0 · made for you'));
+    panel.appendChild(ce('div', 'version', 'MOGUL · v3.0 · made for you'));
   }
 
   function toggleRow(label, key, on) {
@@ -656,6 +728,7 @@
     var rndOpen = G.innovationsUnlocked(st);
     setBadge(el.insightBadge, el.insightVal, st.insight, rndOpen);
     el.multVal.textContent = F.mult(d.globalProfit);
+    updateSpark(st);
 
     // reveal R&D tab once unlocked
     if (el.tabRnd) el.tabRnd.hidden = !rndOpen;
@@ -682,6 +755,44 @@
   function setBadge(badge, valEl, value, show) {
     badge.hidden = !show;
     if (show) valEl.textContent = num(value);
+  }
+
+  // Header sparkline of lifetime earnings (log scale = the line always climbs).
+  function updateSpark(st) {
+    if (!el.spark) return;
+    var t = ctrl.now();
+    if (t - sparkLastSample > 850) {
+      sparkLastSample = t;
+      sparkData.push(Math.log10(1 + (st.earnedAll || 0)));
+      if (sparkData.length > 56) sparkData.shift();
+    }
+    if (sparkData.length < 2) return;
+    var c = el.spark, cx = c.getContext('2d');
+    var dprS = Math.min(2, window.devicePixelRatio || 1);
+    var w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
+    if (c.width !== Math.floor(w * dprS)) { c.width = Math.floor(w * dprS); c.height = Math.floor(h * dprS); }
+    cx.setTransform(dprS, 0, 0, dprS, 0, 0);
+    cx.clearRect(0, 0, w, h);
+    var lo = Infinity, hi = -Infinity, i;
+    for (i = 0; i < sparkData.length; i++) { lo = Math.min(lo, sparkData[i]); hi = Math.max(hi, sparkData[i]); }
+    var span = Math.max(0.0001, hi - lo);
+    var n = sparkData.length, pad = 2;
+    function px(i) { return pad + (i / (n - 1)) * (w - pad * 2); }
+    function py(v) { return h - pad - ((v - lo) / span) * (h - pad * 2); }
+    // area
+    var grad = cx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(232,198,106,0.30)');
+    grad.addColorStop(1, 'rgba(232,198,106,0)');
+    cx.beginPath(); cx.moveTo(px(0), h);
+    for (i = 0; i < n; i++) cx.lineTo(px(i), py(sparkData[i]));
+    cx.lineTo(px(n - 1), h); cx.closePath(); cx.fillStyle = grad; cx.fill();
+    // line
+    cx.beginPath();
+    for (i = 0; i < n; i++) { var X = px(i), Y = py(sparkData[i]); i ? cx.lineTo(X, Y) : cx.moveTo(X, Y); }
+    cx.strokeStyle = '#e8c66a'; cx.lineWidth = 1.5; cx.lineJoin = 'round'; cx.stroke();
+    // head dot
+    cx.fillStyle = '#86f7bd'; cx.beginPath(); cx.arc(px(n - 1), py(sparkData[n - 1]), 2.4, 0, 7); cx.fill();
   }
 
   function sectionTitle(title, right) {
@@ -718,6 +829,28 @@
       el.fx.appendChild(p);
       (function (pp) { setTimeout(function () { pp.remove(); }, 720); })(p);
     }
+  }
+
+  function goldRain(n) {
+    if (reduceMotion()) return;
+    n = n || 40;
+    var colors = ['#f3c969', '#e8c66a', '#86f7bd', '#fbe9b8'];
+    for (var i = 0; i < n; i++) {
+      var b = ce('div', 'goldbit');
+      b.style.left = Math.random() * 100 + 'vw';
+      b.style.background = colors[i % colors.length];
+      b.style.animationDuration = (1.3 + Math.random() * 1.6) + 's';
+      b.style.animationDelay = (Math.random() * 0.5) + 's';
+      el.fx.appendChild(b);
+      (function (bb) { setTimeout(function () { bb.remove(); }, 3200); })(b);
+    }
+  }
+
+  function flash() {
+    if (reduceMotion()) return;
+    var f = ce('div', 'screen-flash');
+    el.fx.appendChild(f);
+    setTimeout(function () { f.remove(); }, 650);
   }
 
   function hustleFx(value) {
@@ -830,6 +963,33 @@
     );
   }
 
+  function decisionModal(decision) {
+    var opts = decision.options.map(function (o, i) {
+      return '<button class="decision-opt" data-action="decision" data-id="' + decision.id + '" data-opt="' + i + '">' +
+        '<b>' + o.label + '</b><span>' + o.desc + '</span></button>';
+    }).join('');
+    modal(
+      '<div class="modal-emoji">' + decision.icon + '</div>' +
+      '<div class="era-kicker">BOARDROOM DECISION</div>' +
+      '<h2 class="modal-title">' + decision.title + '</h2>' +
+      '<p class="modal-body">' + decision.body + '</p>' +
+      '<div class="decision-opts">' + opts + '</div>'
+    );
+  }
+
+  function challengeResultModal(def, success) {
+    modal(
+      '<div class="era-modal-glow"></div>' +
+      '<div class="modal-emoji big">' + (success ? def.icon : '🚫') + '</div>' +
+      '<div class="era-kicker">' + (success ? 'CHALLENGE COMPLETE' : 'CHALLENGE FAILED') + '</div>' +
+      '<h2 class="modal-title">' + def.name + '</h2>' +
+      (success
+        ? '<p class="modal-body">Permanent reward unlocked:</p><div class="era-bonus">🎁 ' + def.rewardDesc + '</div>'
+        : '<p class="modal-body">You didn\'t reach the goal in time. Your empire is restored — try again whenever you like.</p>') +
+      '<div class="modal-actions"><button class="btn primary wide" data-action="closemodal">' + (success ? 'Claim' : 'OK') + '</button></div>'
+    );
+  }
+
   function promptModal(opts) {
     modal(
       '<h2 class="modal-title">' + opts.title + '</h2>' +
@@ -848,9 +1008,9 @@
   root.MOGUL.ui = {
     init: init, render: render, refresh: refresh, invalidate: invalidate, switchTab: switchTab,
     toast: toast, confirmModal: confirmModal, offlineModal: offlineModal, promptModal: promptModal,
-    eraModal: eraModal, pinnacleModal: pinnacleModal,
+    eraModal: eraModal, pinnacleModal: pinnacleModal, decisionModal: decisionModal, challengeResultModal: challengeResultModal,
     closeModal: closeModal, getModalInput: getModalInput,
-    floater: floater, burst: burst, hustleFx: hustleFx,
+    floater: floater, burst: burst, hustleFx: hustleFx, goldRain: goldRain, flash: flash,
     spawnEventToken: spawnEventToken, catchToken: catchToken,
     modalRoot: function () { return el.modalRoot; },
     setSciFromState: function () { sci = ctrl.getState().settings.notation === 'scientific'; }
