@@ -96,6 +96,9 @@
       // tapping settings gear when already there: no-op
     }
     activeTab = name;
+    // clear the "new content" attention dot for the tab we're opening
+    if (name === 'market' && el.dotMarket) el.dotMarket.hidden = true;
+    if (name === 'trophies' && el.dotTrophies) el.dotTrophies.hidden = true;
     Object.keys(el.panels).forEach(function (k) { el.panels[k].hidden = (k !== name); });
     document.querySelectorAll('.tab-btn').forEach(function (b) {
       b.classList.toggle('is-active', b.getAttribute('data-tab') === name);
@@ -732,6 +735,12 @@
       var n = G.BOARD_BY_ID[nid];
       if (n && refs.board[key]) refs.board[key].classList.toggle('cant', avail < n.cost);
     }
+    // live affordability for Syndicate directives + form + challenge starts
+    var bp = el.panels.board;
+    var infl = G.influenceAvailable(st);
+    bp.querySelectorAll('.syn-buy').forEach(function (b) { var dn = G.DIRECTIVE_BY_ID[b.getAttribute('data-id')]; if (dn) b.classList.toggle('cant', infl < dn.cost); });
+    var sb = bp.querySelector('.syn-btn'); if (sb) sb.classList.toggle('cant', !G.canSyndicate(st));
+    bp.querySelectorAll('.chal-enter').forEach(function (b) { b.disabled = !!st.activeChallenge; });
   }
 
   // ---------------------------------------------------------------------------
@@ -824,7 +833,7 @@
       'On iPhone: tap the <b>Share</b> icon in Safari, then <b>Add to Home Screen</b> for a full-screen, offline app.'));
     panel.appendChild(inst);
 
-    panel.appendChild(ce('div', 'version', 'MOGUL · v4.0 · made for you'));
+    panel.appendChild(ce('div', 'version', 'MOGUL · v4.1 · made for you'));
   }
 
   function toggleRow(label, key, on) {
@@ -1064,6 +1073,8 @@
   function closeModal() {
     el.modalRoot.innerHTML = '';
     el.modalRoot.classList.remove('open');
+    el.modalRoot._confirm = null;
+    el.modalRoot._promptOk = null;
   }
 
   function modal(innerHTML) {

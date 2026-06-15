@@ -634,6 +634,90 @@ body::after {
 .syn-buy { background: linear-gradient(180deg, #cdd9f0, #8aa0c8) !important; color: #141a2a !important; }
 .syn-buy.cant { background: var(--surface-hi) !important; color: var(--muted-2) !important; }
 
+/* ============================================================================
+   GRAPHICS v2 — premium polish (materials, sheen, gloss). Overrides above.
+   All animations are auto-disabled by the reduced-motion rules below.
+   ============================================================================ */
+
+/* animated gold sheen sweeping across the net-worth number */
+.networth {
+  background:
+    linear-gradient(110deg, transparent 42%, rgba(255, 252, 235, 0.65) 50%, transparent 58%),
+    linear-gradient(180deg, #fdeec0, var(--gold) 55%, var(--gold-deep));
+  background-size: 280% 100%, 100% 100%;
+  background-position: 180% 0, 0 0;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: sheen 5s ease-in-out infinite;
+}
+@keyframes sheen { 0% { background-position: 180% 0, 0 0; } 55%, 100% { background-position: -80% 0, 0 0; } }
+
+/* richer header atmosphere */
+#topbar::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: -1;
+  background: radial-gradient(120% 80% at 50% -20%, rgba(232, 198, 106, 0.12), transparent 60%);
+}
+
+/* card materials: inner top highlight + deeper shadow on every surface card */
+.biz, .up-card, .board-node, .asset, .ach, .stats, .settings-box, .ipo-hero, .dyn-hero, .syn-hero, .insight-hero, .market-hero, .chal-banner {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 26px -14px rgba(0, 0, 0, 0.8);
+}
+.biz, .up-card, .board-node, .asset {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 22%), linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+
+/* premium business medallion */
+.biz-art {
+  background:
+    radial-gradient(120% 120% at 32% 18%, rgba(255, 255, 255, 0.06), transparent 45%),
+    radial-gradient(130% 130% at 30% 22%, var(--surface-hi), #0c0e14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 0 16px rgba(0, 0, 0, 0.55);
+}
+.biz-art::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(232, 198, 106, 0.12);
+}
+.biz-icon { transition: transform .25s cubic-bezier(.2, .9, .3, 1.4); }
+.biz-art:active .biz-icon { transform: scale(1.18) rotate(-4deg); }
+
+/* glossy progress bars with a slow shine sweep */
+.biz-progress, .cb-progress { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5); }
+.biz-fill { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3); position: absolute; overflow: hidden; }
+.biz-fill::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, 0.45) 50%, transparent 65%);
+  transform: translateX(-100%); animation: barShine 2.6s ease-in-out infinite;
+}
+@keyframes barShine { 0% { transform: translateX(-120%); } 60%, 100% { transform: translateX(120%); } }
+
+/* buttons: inset top highlight + crisper press (highlight via shadow only —
+   must NOT touch background-image or it would erase the gold/green gradient) */
+.buy-btn, .mgr-btn, .up-buy, .bn-buy, .ipo-btn, .dyn-btn, .syn-btn, .ba-btn.is-on, .asset-buy, .asset-sell, .boost-btn, .chal-enter, .insight-buy {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 6px 14px -8px rgba(0, 0, 0, 0.6);
+}
+.buy-btn.cant, .up-buy.cant, .bn-buy.cant, .mgr-btn.cant, .asset-buy.cant, .asset-sell.cant { box-shadow: none; }
+
+/* glowing active tab indicator */
+.tab-btn.is-active::before {
+  content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 26px; height: 3px; border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  box-shadow: 0 0 10px var(--gold);
+}
+
+/* badges + meta chips: subtle inner highlight */
+.badge { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+
+/* market price chart cards: slight glass */
+.asset-chart { background: rgba(0, 0, 0, 0.18); border-radius: 8px; }
+
+/* era chip gets the full header width (not just the net-worth number's width),
+   so long era/empire names fit; ellipsis only as a last resort */
+.networth-wrap { width: 100%; }
+.era { max-width: 96%; margin-left: auto; margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.03em; }
+
+/* floaters: crisper premium pop */
+.floater { letter-spacing: .01em; text-shadow: 0 1px 10px rgba(232, 198, 106, 0.4), 0 2px 4px rgba(0, 0, 0, 0.6); }
+
 /* ===================== REDUCED MOTION ===================== */
 .reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
   animation-duration: 0.001s !important; animation-iteration-count: 1 !important;

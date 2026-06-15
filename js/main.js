@@ -172,9 +172,12 @@
     }
 
     // Syndicate automation
-    if (derived.syn.autoInnovate && t - lastAutoInnov > 2000) { lastAutoInnov = t; autoInnovate(); }
-    if (derived.syn.autoIPO && t - lastAutoIPO > 5000) { lastAutoIPO = t; autoIPO_maybe(); }
-    if (derived.syn.autoChallenge && !state.activeChallenge && t - lastAutoChal > 8000) { lastAutoChal = t; autoChallenge(); }
+    // automation must NOT run during a Challenge run (it would reset/disrupt it)
+    if (!state.activeChallenge) {
+      if (derived.syn.autoInnovate && t - lastAutoInnov > 2000) { lastAutoInnov = t; autoInnovate(); }
+      if (derived.syn.autoIPO && t - lastAutoIPO > 5000) { lastAutoIPO = t; autoIPO_maybe(); }
+      if (derived.syn.autoChallenge && t - lastAutoChal > 8000) { lastAutoChal = t; autoChallenge(); }
+    }
 
     if (t - lastSave > 10000) { lastSave = t; saveNow(); }
   }
