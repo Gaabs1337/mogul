@@ -1,0 +1,5 @@
+tests/
+docs/
+*.py
+.DS_Store
+.vercelignore
