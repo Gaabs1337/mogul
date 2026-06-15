@@ -67,6 +67,15 @@
       challengeStartAt: 0,
       decisionsMade: 0,
       nextDecisionAt: 0,
+      // The Market + Syndicate (prestige 3) + personalization
+      market: { assets: {} },
+      marketProfit: 0,
+      influence: 0,
+      influenceSpent: 0,
+      directives: {},
+      syndicates: 0,
+      legacyAllTime: 0,
+      empireName: '',
       // transient buffs/timers (never trusted from disk)
       combo: 0,
       lastTapAt: 0,
@@ -82,7 +91,8 @@
         reduceMotion: false,
         notation: 'standard',
         buyAmount: 1,        // 1 | 10 | 100 | 'max'
-        autoBuyer: false     // toggle (only effective once unlocked)
+        autoBuyer: false,    // toggle (only effective once unlocked)
+        affordableOnly: false // show only affordable items in lists
       }
     };
   }
@@ -117,6 +127,13 @@
     d.eraSeen = Math.max(0, Math.min(data.ERAS.length - 1, Math.floor(num(loaded.eraSeen, 0))));
     d.pinnacle = !!loaded.pinnacle;
     d.decisionsMade = Math.max(0, Math.floor(num(loaded.decisionsMade, 0)));
+    d.marketProfit = num(loaded.marketProfit, 0); // may be negative
+    d.influence = Math.max(0, Math.floor(num(loaded.influence, 0)));
+    d.influenceSpent = Math.max(0, Math.floor(num(loaded.influenceSpent, 0)));
+    d.syndicates = Math.max(0, Math.floor(num(loaded.syndicates, 0)));
+    d.legacyAllTime = Math.max(d.legacy, Math.floor(num(loaded.legacyAllTime, d.legacy)));
+    d.empireName = sanitizeName(loaded.empireName);
+    sanitizeMarket(d, loaded.market);
     // active challenge runs are intentionally not restored (avoids offline/timer edge cases)
     d.createdAt = num(loaded.createdAt, d.createdAt);
     d.lastSaveAt = num(loaded.lastSaveAt, d.lastSaveAt);
@@ -146,6 +163,7 @@
     copyFlags(d.dynastyPerks, loaded.dynastyPerks);
     copyFlags(d.innovations, loaded.innovations);
     copyFlags(d.completedChallenges, loaded.completedChallenges);
+    copyFlags(d.directives, loaded.directives);
 
     if (loaded.settings && typeof loaded.settings === 'object') {
       d.settings.sound = !!loaded.settings.sound;
@@ -154,8 +172,35 @@
       var ba = loaded.settings.buyAmount;
       d.settings.buyAmount = (ba === 1 || ba === 10 || ba === 100 || ba === 'max') ? ba : 1;
       d.settings.autoBuyer = !!loaded.settings.autoBuyer;
+      d.settings.affordableOnly = !!loaded.settings.affordableOnly;
     }
     return d;
+  }
+
+  // Empire name: plain text only, trimmed, capped — never trust raw strings.
+  function sanitizeName(v) {
+    if (typeof v !== 'string') return '';
+    return v.replace(/[<>]/g, '').replace(/[\x00-\x1f]/g, '').trim().slice(0, 22);
+  }
+
+  // Restore market positions onto fresh baseline-initialised assets.
+  function sanitizeMarket(d, loaded) {
+    d.market = { assets: {} };
+    var defs = data.MARKET_ASSETS;
+    for (var k = 0; k < defs.length; k++) {
+      var a = defs[k];
+      var fresh = { price: a.baseline, shares: 0, avgCost: 0, hist: [a.baseline] };
+      var lb = loaded && loaded.assets ? loaded.assets[a.id] : null;
+      if (lb) {
+        var p = num(lb.price, a.baseline);
+        var lo = a.baseline * 0.12, hi = a.baseline * 5;
+        fresh.price = (p >= lo && p <= hi) ? p : a.baseline;
+        fresh.shares = Math.max(0, num(lb.shares, 0));
+        fresh.avgCost = Math.max(0, num(lb.avgCost, 0));
+        fresh.hist = [fresh.price];
+      }
+      d.market.assets[a.id] = fresh;
+    }
   }
 
   function copyFlags(target, src) {
@@ -218,6 +263,7 @@
     now: now,
     defaultState: defaultState,
     sanitize: sanitize,
+    sanitizeName: sanitizeName,
     save: save,
     load: load,
     wipe: wipe,

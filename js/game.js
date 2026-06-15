@@ -29,6 +29,8 @@
   var ERAS = data.ERAS;
   var CHALLENGES = data.CHALLENGES;
   var DECISIONS = data.DECISIONS;
+  var MARKET_ASSETS = data.MARKET_ASSETS;
+  var DIRECTIVES = data.SYNDICATE_DIRECTIVES;
 
   // Quick lookup maps.
   var BIZ_BY_ID = {};
@@ -47,6 +49,10 @@
   CHALLENGES.forEach(function (c) { CHALLENGE_BY_ID[c.id] = c; });
   var DECISION_BY_ID = {};
   DECISIONS.forEach(function (d) { DECISION_BY_ID[d.id] = d; });
+  var MARKET_BY_ID = {};
+  MARKET_ASSETS.forEach(function (a) { MARKET_BY_ID[a.id] = a; });
+  var DIRECTIVE_BY_ID = {};
+  DIRECTIVES.forEach(function (n) { DIRECTIVE_BY_ID[n.id] = n; });
 
   // ---------------------------------------------------------------------------
   // Cost curves
@@ -296,6 +302,7 @@
     var innov = deriveInnovations(state);
     if (restr && restr.noInnovations) innov = deriveInnovations({ innovations: {} });
     var chal = deriveChallengeRewards(state);
+    var syn = deriveSyndicate(state);
     var ach = achievementMult(state);
     var inv = investorMult(state, board.investorEff);
 
@@ -309,7 +316,7 @@
     var scaleMult = 1 + innov.scale * Math.log10(1 + totalUnits(state));
 
     var globalProfit = up.allProfit * board.profit * dyn.profit * dyn.legacyProfit * ach * inv
-      * eraMult * synergyMult * scaleMult * innov.profit * chal.profit;
+      * eraMult * synergyMult * scaleMult * innov.profit * chal.profit * syn.profit * syn.influenceProfit;
     if (boomActive) globalProfit *= CONFIG.eventBoomMult;
     if (surgeActive) globalProfit *= CONFIG.boostSurgeMult;
     var globalSpeed = up.allSpeed * board.speed * chal.speed;
@@ -337,13 +344,13 @@
     }
 
     return {
-      up: up, board: board, dyn: dyn, innov: innov, ach: ach, inv: inv, chal: chal, restr: restr,
+      up: up, board: board, dyn: dyn, innov: innov, ach: ach, inv: inv, chal: chal, restr: restr, syn: syn,
       boomActive: boomActive, frenzyActive: frenzyActive, surgeActive: surgeActive,
       eraIndex: eIdx, eraMult: eraMult, synergyMult: synergyMult, scaleMult: scaleMult,
       globalProfit: globalProfit, globalSpeed: globalSpeed, franchise: fr,
       offlineCapHours: board.offlineCapHours + innov.offlineCap,
       offlineEff: Math.max(board.offlineEff, innov.offlineEff),
-      insightPerSec: insightPerSec(state, innov) * chal.insightRate,
+      insightPerSec: insightPerSec(state, innov) * chal.insightRate * syn.insightRate,
       revPerCycle: revPerCycle, cycleTime: cycleTime, incomePerSec: incomePerSec,
       managedIncomePerSec: managed, potentialIncomePerSec: potential
     };
@@ -598,6 +605,7 @@
     if (!canDynasty(state)) return 0;
     var gain = pendingLegacy(state);
     state.legacy += gain;
+    state.legacyAllTime = (state.legacyAllTime || 0) + gain;
     state.dynasties += 1;
     // Deep reset: investors, board, cash upgrades, businesses.
     state.investors = 0;
@@ -670,6 +678,9 @@
       insightTotal: state.insightTotal || 0,
       challengesDone: challengesDoneCount(state),
       challengesTotal: CHALLENGES.length,
+      marketProfit: state.marketProfit || 0,
+      syndicates: state.syndicates || 0,
+      influence: state.influence || 0,
       ownedMax: ownedMax
     };
   }
@@ -836,6 +847,128 @@
   }
 
   // ---------------------------------------------------------------------------
+  // The Market — mean-reverting prices (no free EV; profit is pure timing)
+  // ---------------------------------------------------------------------------
+  function marketUnlocked(state) {
+    return (state.ipos || 0) >= CONFIG.marketUnlockIpos || (state.market && Object.keys(state.market.assets || {}).length > 0);
+  }
+  function marketInit(state) {
+    if (!state.market || typeof state.market !== 'object') state.market = { assets: {} };
+    if (!state.market.assets) state.market.assets = {};
+    for (var i = 0; i < MARKET_ASSETS.length; i++) {
+      var a = MARKET_ASSETS[i];
+      if (!state.market.assets[a.id]) state.market.assets[a.id] = { price: a.baseline, shares: 0, avgCost: 0, hist: [a.baseline] };
+    }
+    return state.market;
+  }
+  function marketTick(state, rng) {
+    rng = rng || Math.random;
+    var m = marketInit(state);
+    var evt = null;
+    if (rng() < CONFIG.marketEventChance) {
+      var crash = rng() < 0.5;
+      evt = { kind: crash ? 'crash' : 'rally', factor: crash ? (0.6 + rng() * 0.2) : (1.2 + rng() * 0.3) };
+    }
+    for (var i = 0; i < MARKET_ASSETS.length; i++) {
+      var a = MARKET_ASSETS[i], as = m.assets[a.id];
+      var p = as.price * (1 + a.vol * (rng() * 2 - 1)) + a.rev * (a.baseline - as.price);
+      if (evt) p *= evt.factor;
+      var lo = a.baseline * 0.12, hi = a.baseline * 5;
+      as.price = p < lo ? lo : (p > hi ? hi : p);
+      as.hist.push(as.price);
+      if (as.hist.length > CONFIG.marketHistory) as.hist.shift();
+    }
+    return evt;
+  }
+  function buyAsset(state, id, cashAmount) {
+    marketInit(state);
+    var as = state.market.assets[id];
+    if (!as) return false;
+    cashAmount = Math.min(cashAmount, state.cash);
+    if (!(cashAmount > 0) || as.price <= 0) return false;
+    var bought = cashAmount / as.price;
+    var newShares = as.shares + bought;
+    as.avgCost = (as.shares * as.avgCost + cashAmount) / newShares;
+    as.shares = newShares;
+    state.cash -= cashAmount;
+    return { shares: bought, cost: cashAmount };
+  }
+  function sellAsset(state, id, frac) {
+    marketInit(state);
+    var as = state.market.assets[id];
+    if (!as || as.shares <= 0) return false;
+    frac = (frac === 'all' || frac == null) ? 1 : Math.max(0, Math.min(1, frac));
+    var sold = as.shares * frac;
+    if (!(sold > 0)) return false;
+    var proceeds = sold * as.price;
+    var gain = sold * (as.price - as.avgCost);
+    as.shares -= sold;
+    state.cash += proceeds;
+    state.marketProfit = (state.marketProfit || 0) + gain;
+    return { shares: sold, proceeds: proceeds, gain: gain };
+  }
+  function portfolioValue(state) {
+    if (!state.market || !state.market.assets) return 0;
+    var v = 0;
+    for (var id in state.market.assets) { var as = state.market.assets[id]; v += as.shares * as.price; }
+    return v;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Syndicate (prestige 3) — Directives unlock new mechanics (mostly automation)
+  // ---------------------------------------------------------------------------
+  function deriveSyndicate(state) {
+    var out = { autoIPO: false, autoBuyer: false, autoTrade: false, autoInnovate: false, autoChallenge: false, profit: 1, insightRate: 1, influenceProfit: 1 };
+    var dir = state.directives || {};
+    for (var id in dir) {
+      if (!dir[id]) continue;
+      var n = DIRECTIVE_BY_ID[id]; if (!n) continue;
+      var e = n.effect;
+      switch (e.kind) {
+        case 'autoIPO': out.autoIPO = true; break;
+        case 'autoBuyer': out.autoBuyer = true; break;
+        case 'autoTrade': out.autoTrade = true; break;
+        case 'autoInnovate': out.autoInnovate = true; break;
+        case 'autoChallenge': out.autoChallenge = true; break;
+        case 'profit': out.profit *= e.value; break;
+        case 'insightRate': out.insightRate *= e.value; break;
+      }
+    }
+    out.influenceProfit = 1 + (state.influence || 0) * CONFIG.influencePerBonus;
+    return out;
+  }
+  function syndicateUnlocked(state) {
+    return (state.legacyAllTime || 0) >= CONFIG.syndicateUnlockLegacy || (state.syndicates || 0) > 0;
+  }
+  function influenceTarget(state) { return Math.floor(Math.sqrt(Math.max(0, state.legacyAllTime || 0) / CONFIG.syndicateScale)); }
+  function pendingInfluence(state) { return Math.max(0, influenceTarget(state) - (state.influence || 0)); }
+  function canSyndicate(state) { return syndicateUnlocked(state) && pendingInfluence(state) >= 1; }
+  function influenceAvailable(state) { return (state.influence || 0) - (state.influenceSpent || 0); }
+  function buyDirective(state, id) {
+    var n = DIRECTIVE_BY_ID[id];
+    if (!n || (state.directives && state.directives[id])) return false;
+    if (influenceAvailable(state) < n.cost) return false;
+    state.directives = state.directives || {};
+    state.influenceSpent = (state.influenceSpent || 0) + n.cost;
+    state.directives[id] = true;
+    return true;
+  }
+  function doSyndicate(state) {
+    if (!canSyndicate(state)) return 0;
+    var gain = pendingInfluence(state);
+    state.influence = (state.influence || 0) + gain;
+    state.syndicates = (state.syndicates || 0) + 1;
+    // deep reset; KEEP innovations, insight, achievements, influence, directives,
+    // earnedAll, legacyAllTime, investorsAllTime, completed challenges, eras, pinnacle
+    state.investors = 0; state.investorsSpent = 0; state.board = {}; state.upgrades = {};
+    state.legacy = 0; state.legacySpent = 0;
+    state.market = { assets: {} };
+    var dyn = deriveDynasty(state);
+    resetEmpire(state, { dyn: dyn, board: deriveBoard(state) });
+    return gain;
+  }
+
+  // ---------------------------------------------------------------------------
   // Eras + Pinnacle (phase-shift / win-state)
   // ---------------------------------------------------------------------------
   function checkEra(state) {
@@ -903,6 +1036,13 @@
     challengeTimeLeft: challengeTimeLeft, checkChallenge: checkChallenge,
     // decisions
     DECISION_BY_ID: DECISION_BY_ID, pickDecision: pickDecision, applyDecision: applyDecision,
+    // market
+    MARKET_BY_ID: MARKET_BY_ID, marketUnlocked: marketUnlocked, marketInit: marketInit, marketTick: marketTick,
+    buyAsset: buyAsset, sellAsset: sellAsset, portfolioValue: portfolioValue,
+    // syndicate (prestige 3)
+    DIRECTIVE_BY_ID: DIRECTIVE_BY_ID, deriveSyndicate: deriveSyndicate, syndicateUnlocked: syndicateUnlocked,
+    influenceTarget: influenceTarget, pendingInfluence: pendingInfluence, canSyndicate: canSyndicate,
+    influenceAvailable: influenceAvailable, buyDirective: buyDirective, doSyndicate: doSyndicate,
     // qol
     timeToAfford: timeToAfford, totalUnits: totalUnits, managedTypeCount: managedTypeCount
   };

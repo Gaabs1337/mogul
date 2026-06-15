@@ -17,8 +17,13 @@
   var lastAutoBuy = 0;
   var nextEventAt = 0;
   var nextDecisionAt = 0;
+  var lastMarketTick = 0;
+  var lastAutoInnov = 0;
+  var lastAutoIPO = 0;
+  var lastAutoChal = 0;
   var offlineResult = null;
   var rndAnnounced = false;
+  var marketAnnounced = false;
 
   function now() { return Date.now(); }
 
@@ -150,10 +155,26 @@
       nextEventAt = t + gap * 1000;
     }
 
-    if (derived.board.autoBuyer && state.settings.autoBuyer && t - lastAutoBuy > D.CONFIG.autoBuyInterval * 1000) {
+    if ((derived.board.autoBuyer || derived.syn.autoBuyer) && state.settings.autoBuyer && t - lastAutoBuy > D.CONFIG.autoBuyInterval * 1000) {
       lastAutoBuy = t;
       autoBuy();
     }
+
+    // The Market — tick prices; announce unlock; auto-trade (Syndicate)
+    if (G.marketUnlocked(state)) {
+      if (!marketAnnounced) { marketAnnounced = true; UI.toast('📈 The Market is open — buy low, sell high.', 'gold'); flashDot('dot-market'); }
+      if (t - lastMarketTick > D.CONFIG.marketTickSec * 1000) {
+        lastMarketTick = t;
+        var mevt = G.marketTick(state);
+        if (mevt) UI.toast(mevt.kind === 'crash' ? '📉 Market crash!' : '📈 Market rally!', mevt.kind === 'rally' ? 'gold' : '');
+        if (derived.syn.autoTrade) autoTrade();
+      }
+    }
+
+    // Syndicate automation
+    if (derived.syn.autoInnovate && t - lastAutoInnov > 2000) { lastAutoInnov = t; autoInnovate(); }
+    if (derived.syn.autoIPO && t - lastAutoIPO > 5000) { lastAutoIPO = t; autoIPO_maybe(); }
+    if (derived.syn.autoChallenge && !state.activeChallenge && t - lastAutoChal > 8000) { lastAutoChal = t; autoChallenge(); }
 
     if (t - lastSave > 10000) { lastSave = t; saveNow(); }
   }
@@ -178,10 +199,14 @@
   function flashDot(id) { var d = document.getElementById(id); if (d) d.hidden = false; }
 
   // ---------------------------------------------------------------------------
+  var lastHustleTap = 0;
   function onHustle(e) {
+    var tn = now();
+    if (tn - lastHustleTap < D.CONFIG.tapCooldownMs) return; // click cooldown (caps auto-clickers)
+    lastHustleTap = tn;
     A.unlock();
-    derived = G.derive(state, now());
-    var res = G.tap(state, derived, now());
+    derived = G.derive(state, tn);
+    var res = G.tap(state, derived, tn);
     UI.hustleFx(res.value);
     A.play('tap');
   }
@@ -276,6 +301,33 @@
         }
         break;
       }
+      case 'buyasset': {
+        var frac = UI.getMarketFrac();
+        var amt = state.cash * frac;
+        var r = G.buyAsset(state, p.id, amt);
+        if (r) { A.play('buy'); } else A.play('error');
+        break;
+      }
+      case 'sellasset': {
+        var s = G.sellAsset(state, p.id, 'all');
+        if (s) { A.play('manager'); buttonFloat(p.el, (s.gain >= 0 ? '+' : '−') + F.money(Math.abs(s.gain))); } else A.play('error');
+        break;
+      }
+      case 'marketfrac': { UI.setMarketFrac(parseFloat(p.amount)); break; }
+      case 'syndicate': doSyndicate(); break;
+      case 'directive': {
+        if (G.buyDirective(state, p.id)) { A.play('upgrade'); derived = G.derive(state, now()); UI.invalidate('board'); UI.invalidate('settings'); }
+        else A.play('error');
+        break;
+      }
+      case 'nameempire': {
+        UI.promptModal({
+          title: 'Name your empire', body: 'What shall history call it?', placeholder: 'e.g. Aurum Holdings',
+          value: state.empireName || '', confirm: 'Save', selectAll: true,
+          onConfirm: function (val) { state.empireName = S.sanitizeName ? S.sanitizeName(val) : String(val || '').slice(0, 22); UI.invalidate('settings'); saveNow(); }
+        });
+        break;
+      }
       case 'ipo': doIPO(); break;
       case 'dynasty': doDynasty(); break;
       case 'set': onSetting(p.key, p.val); break;
@@ -342,6 +394,26 @@
     });
   }
 
+  function doSyndicate() {
+    if (!G.canSyndicate(state)) { A.play('error'); UI.toast('Not enough Legacy for a Syndicate yet.'); return; }
+    var pending = G.pendingInfluence(state);
+    UI.confirmModal({
+      emoji: '🕴️',
+      title: 'Form a Syndicate?',
+      body: 'The deepest reset: dissolve investors, the board, cash upgrades and Legacy. You keep R&D, Challenges and achievements, and gain <b>+' + F.scaled(pending) + ' Influence</b> to spend on automation Directives.',
+      confirm: 'Form Syndicate', cancel: 'Not yet',
+      onConfirm: function () {
+        var gain = G.doSyndicate(state);
+        derived = G.derive(state, now());
+        A.play('ipo');
+        celebrate('🕴️', 'Syndicate formed! +' + F.scaled(gain) + ' Influence');
+        G.checkAchievements(state);
+        UI.refresh();
+        saveNow();
+      }
+    });
+  }
+
   function celebrate(emoji, msg) {
     UI.toast(emoji + ' ' + msg, 'gold');
     var cx = window.innerWidth / 2, cy = window.innerHeight * 0.4;
@@ -357,6 +429,7 @@
     else if (key === 'reduceMotion') { state.settings.reduceMotion = val === '1'; document.body.classList.toggle('reduce-motion', state.settings.reduceMotion); }
     else if (key === 'notation') { state.settings.notation = val === 'scientific' ? 'scientific' : 'standard'; UI.setSciFromState(); }
     else if (key === 'autoBuyer') { state.settings.autoBuyer = val === '1'; }
+    else if (key === 'affordableOnly') { state.settings.affordableOnly = val === '1'; }
     UI.invalidate('settings');
     saveNow();
   }
@@ -465,6 +538,46 @@
       }
       if (!best) break;
       G.buyBusiness(state, best.id, 1);
+    }
+  }
+
+  // Syndicate automations
+  function autoTrade() {
+    var assets = state.market && state.market.assets;
+    if (!assets) return;
+    for (var i = 0; i < D.MARKET_ASSETS.length; i++) {
+      var a = D.MARKET_ASSETS[i], as = assets[a.id];
+      if (!as) continue;
+      if (as.price < a.baseline * 0.85 && state.cash > 1) G.buyAsset(state, a.id, state.cash * 0.05);
+      else if (as.shares > 0 && as.price > a.baseline * 1.15) G.sellAsset(state, a.id, 1);
+    }
+  }
+  function autoInnovate() {
+    var best = null;
+    for (var i = 0; i < D.INNOVATIONS.length; i++) {
+      var n = D.INNOVATIONS[i];
+      if (!state.innovations[n.id] && G.isInnovationUnlocked(state, n) && (state.insight || 0) >= n.cost) {
+        if (!best || n.cost < best.cost) best = n;
+      }
+    }
+    if (best) { G.buyInnovation(state, best.id); derived = G.derive(state, now()); }
+  }
+  function autoIPO_maybe() {
+    var d = G.derive(state, now());
+    var pend = G.pendingInvestors(state, d);
+    if (pend >= Math.max(2, (state.investors || 0) * 0.5)) { G.doIPO(state, d); derived = G.derive(state, now()); }
+  }
+  function autoChallenge() {
+    for (var i = 0; i < D.CHALLENGES.length; i++) {
+      var c = D.CHALLENGES[i];
+      if (!(state.completedChallenges && state.completedChallenges[c.id])) {
+        state.completedChallenges = state.completedChallenges || {};
+        state.completedChallenges[c.id] = true;
+        derived = G.derive(state, now());
+        G.checkAchievements(state);
+        UI.toast('⚔️ Auto-won: ' + c.name + ' — ' + c.rewardDesc, 'gold');
+        return;
+      }
     }
   }
 

@@ -19,6 +19,7 @@
   var lastRevealCount = 0;
   var sparkData = [];    // net-worth (log) samples for the header sparkline
   var sparkLastSample = 0;
+  var marketFrac = 0.25; // fraction of cash a "Buy" spends in the Market
 
   function $(sel, ctx) { return (ctx || document).querySelector(sel); }
   function ce(tag, cls, html) {
@@ -48,8 +49,10 @@
     el.eraChip = $('#era-chip');
     el.spark = $('#spark');
     el.tabRnd = $('#tab-rnd');
+    el.tabMarket = $('#tab-market');
     el.dotBoard = $('#dot-board');
     el.dotRnd = $('#dot-rnd');
+    el.dotMarket = $('#dot-market');
     el.dotTrophies = $('#dot-trophies');
     el.fx = $('#fx');
     el.toastRoot = $('#toast-root');
@@ -113,6 +116,7 @@
     if (name === 'empire') buildEmpire(st);
     else if (name === 'upgrades') buildUpgrades(st);
     else if (name === 'rnd') buildRnd(st);
+    else if (name === 'market') buildMarket(st);
     else if (name === 'board') buildBoard(st);
     else if (name === 'trophies') buildTrophies(st);
     else if (name === 'settings') buildSettings(st);
@@ -329,6 +333,7 @@
     var panel = el.panels.upgrades;
     panel.innerHTML = '';
     refs.up = {};
+    refs.upLocked = [];
 
     var available = [], locked = [], owned = 0;
     D.UPGRADES.forEach(function (u) {
@@ -364,16 +369,21 @@
       '<div class="up-desc">' + u.desc + '</div>' +
       (isLocked ? '<div class="up-hint">🔒 ' + hint + '</div>' : '') + '</div>' +
       (isLocked ? '' : '<button class="up-buy" data-action="upgrade" data-id="' + u.id + '"><span data-cost>' + money(u.cost) + '</span></button>');
-    if (!isLocked) refs.up[u.id] = { buy: $('.up-buy', card) };
+    if (!isLocked) refs.up[u.id] = { buy: $('.up-buy', card), card: card };
+    else refs.upLocked.push(card);
     return card;
   }
 
   function updateUpgrades(st) {
+    var aff = st.settings.affordableOnly;
     for (var id in refs.up) {
       var u = G.UP_BY_ID[id];
       if (!u || !refs.up[id]) continue;
-      refs.up[id].buy.classList.toggle('cant', st.cash < u.cost);
+      var can = st.cash >= u.cost;
+      refs.up[id].buy.classList.toggle('cant', !can);
+      refs.up[id].card.hidden = aff && !can;
     }
+    if (refs.upLocked) for (var i = 0; i < refs.upLocked.length; i++) refs.upLocked[i].hidden = aff;
   }
 
   // ---------------------------------------------------------------------------
@@ -438,6 +448,115 @@
   }
 
   // ---------------------------------------------------------------------------
+  // THE MARKET
+  // ---------------------------------------------------------------------------
+  function buildMarket(st) {
+    var panel = el.panels.market;
+    panel.innerHTML = '';
+    refs.market = { assets: {} };
+    G.marketInit(st);
+
+    var hero = ce('div', 'market-hero');
+    hero.innerHTML =
+      '<div class="mh-stats">' +
+      '<div class="mh-stat"><span class="k">Portfolio</span><b data-portfolio></b></div>' +
+      '<div class="mh-stat"><span class="k">Cash</span><b data-mcash></b></div>' +
+      '<div class="mh-stat"><span class="k">Realized P/L</span><b data-mpl></b></div></div>' +
+      '<div class="mh-hint">Buy low, sell high — prices drift back to fair value, so timing is everything.</div>';
+    panel.appendChild(hero);
+    refs.market.portfolio = $('[data-portfolio]', hero);
+    refs.market.mcash = $('[data-mcash]', hero);
+    refs.market.mpl = $('[data-mpl]', hero);
+
+    var bar = ce('div', 'buyamount market-frac');
+    [['0.1', '10%'], ['0.25', '25%'], ['0.5', '50%'], ['1', 'MAX']].forEach(function (a) {
+      var b = ce('button', 'ba-btn' + (Math.abs(marketFrac - parseFloat(a[0])) < 1e-9 ? ' is-on' : ''), a[1]);
+      b.setAttribute('data-action', 'marketfrac'); b.setAttribute('data-amount', a[0]);
+      bar.appendChild(b);
+    });
+    panel.appendChild(bar);
+    refs.market.fracBar = bar;
+
+    var list = ce('div', 'asset-list');
+    D.MARKET_ASSETS.forEach(function (a) { list.appendChild(buildAssetCard(a)); });
+    panel.appendChild(list);
+  }
+
+  function buildAssetCard(a) {
+    var card = ce('div', 'asset');
+    card.innerHTML =
+      '<div class="asset-top"><span class="asset-ico">' + a.icon + '</span>' +
+      '<div class="asset-id"><b>' + a.ticker + '</b><span>' + a.name + '</span></div>' +
+      '<div class="asset-price" data-price></div></div>' +
+      '<canvas class="asset-chart" data-chart></canvas>' +
+      '<div class="asset-bottom"><div class="asset-hold" data-hold></div>' +
+      '<div class="asset-actions">' +
+      '<button class="asset-buy" data-action="buyasset" data-id="' + a.id + '">Buy</button>' +
+      '<button class="asset-sell" data-action="sellasset" data-id="' + a.id + '">Sell</button></div></div>';
+    refs.market.assets[a.id] = {
+      price: $('[data-price]', card), chart: $('[data-chart]', card),
+      hold: $('[data-hold]', card), buy: $('.asset-buy', card), sell: $('.asset-sell', card),
+      lastPrice: null
+    };
+    return card;
+  }
+
+  function updateMarket(st, d) {
+    if (!refs.market) return;
+    if (refs.market.fracBar) refs.market.fracBar.querySelectorAll('.ba-btn').forEach(function (b) {
+      b.classList.toggle('is-on', Math.abs(marketFrac - parseFloat(b.getAttribute('data-amount'))) < 1e-9);
+    });
+    var assets = (st.market && st.market.assets) || {};
+    if (refs.market.portfolio) refs.market.portfolio.textContent = money(G.portfolioValue(st));
+    if (refs.market.mcash) refs.market.mcash.textContent = money(st.cash);
+    if (refs.market.mpl) {
+      var pl = st.marketProfit || 0;
+      refs.market.mpl.textContent = (pl >= 0 ? '+' : '−') + money(Math.abs(pl));
+      refs.market.mpl.className = pl >= 0 ? 'pl-up' : 'pl-down';
+    }
+    for (var id in refs.market.assets) {
+      var r = refs.market.assets[id], as = assets[id];
+      if (!as) continue;
+      r.price.textContent = money(as.price);
+      if (r.lastPrice != null) r.price.className = 'asset-price ' + (as.price >= r.lastPrice ? 'pl-up' : 'pl-down');
+      r.lastPrice = as.price;
+      var val = as.shares * as.price;
+      r.hold.textContent = as.shares > 0 ? (F.scaled(as.shares) + ' sh · ' + money(val)) : 'No position';
+      r.hold.classList.toggle('has', as.shares > 0);
+      r.buy.classList.toggle('cant', st.cash < 1);
+      r.sell.classList.toggle('cant', as.shares <= 0);
+      drawMiniChart(r.chart, as.hist, MARKET_REF(id).baseline);
+    }
+  }
+
+  function MARKET_REF(id) { return G.MARKET_BY_ID[id]; }
+
+  function drawMiniChart(canvas, data, baseline) {
+    if (!canvas || !data || data.length < 2) return;
+    var dprm = Math.min(2, window.devicePixelRatio || 1);
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== Math.floor(w * dprm)) { canvas.width = Math.floor(w * dprm); canvas.height = Math.floor(h * dprm); }
+    var cx = canvas.getContext('2d');
+    cx.setTransform(dprm, 0, 0, dprm, 0, 0);
+    cx.clearRect(0, 0, w, h);
+    var lo = Infinity, hi = -Infinity, i;
+    for (i = 0; i < data.length; i++) { lo = Math.min(lo, data[i]); hi = Math.max(hi, data[i]); }
+    var span = Math.max(1e-6, hi - lo), n = data.length, pad = 2;
+    function px(i) { return pad + (i / (n - 1)) * (w - pad * 2); }
+    function py(v) { return h - pad - ((v - lo) / span) * (h - pad * 2); }
+    // baseline guide
+    if (baseline >= lo && baseline <= hi) {
+      cx.strokeStyle = 'rgba(255,255,255,0.12)'; cx.lineWidth = 1; cx.setLineDash([3, 3]);
+      cx.beginPath(); cx.moveTo(0, py(baseline)); cx.lineTo(w, py(baseline)); cx.stroke(); cx.setLineDash([]);
+    }
+    var up = data[n - 1] >= data[0];
+    cx.beginPath();
+    for (i = 0; i < n; i++) { var X = px(i), Y = py(data[i]); i ? cx.lineTo(X, Y) : cx.moveTo(X, Y); }
+    cx.strokeStyle = up ? '#86f7bd' : '#e8776c'; cx.lineWidth = 1.5; cx.lineJoin = 'round'; cx.stroke();
+  }
+
+  // ---------------------------------------------------------------------------
   // BOARD (IPO + investor tree + Dynasty)
   // ---------------------------------------------------------------------------
   function buildBoard(st) {
@@ -484,10 +603,42 @@
       panel.appendChild(locked);
     }
 
+    // Syndicate (prestige 3)
+    if (G.syndicateUnlocked(st)) {
+      panel.appendChild(buildSyndicate(st));
+    }
+
     // Challenges
     if (G.challengesUnlocked(st)) {
       panel.appendChild(buildChallenges(st));
     }
+  }
+
+  function buildSyndicate(st) {
+    var wrap = ce('div', 'syndicate');
+    var pend = G.pendingInfluence(st);
+    wrap.appendChild(sectionTitle('Syndicate', 'prestige III'));
+    var hero = ce('div', 'syn-hero');
+    hero.innerHTML =
+      '<div class="dyn-head"><span class="dyn-emoji">🕴️</span>' +
+      '<div><div class="ipo-title">Form a Syndicate</div>' +
+      '<div class="ipo-sub">Dissolve investors, board & legacy for permanent Influence + automation</div></div></div>' +
+      '<div class="ipo-stats">' +
+      '<div class="ipo-stat"><span class="k">Influence</span><b>' + num(st.influence) + '</b></div>' +
+      '<div class="ipo-stat"><span class="k">Grants</span><b class="grant">+' + num(pend) + '</b></div>' +
+      '<div class="ipo-stat"><span class="k">To spend</span><b>' + num(G.influenceAvailable(st)) + '</b></div></div>' +
+      '<button class="syn-btn" data-action="syndicate">' + (G.canSyndicate(st) ? 'FORM SYNDICATE  +' + num(pend) : 'Earn more Legacy…') + '</button>';
+    wrap.appendChild(hero);
+    var grid = ce('div', 'board-grid');
+    D.SYNDICATE_DIRECTIVES.forEach(function (n) {
+      var owned = !!(st.directives && st.directives[n.id]);
+      var card = ce('div', 'board-node' + (owned ? ' owned' : ''));
+      card.innerHTML = '<div class="bn-ico">' + n.icon + '</div><div class="bn-main"><div class="bn-name">' + n.name + '</div><div class="bn-desc">' + n.desc + '</div></div>' +
+        (owned ? '<div class="bn-owned">✓</div>' : '<button class="bn-buy syn-buy" data-action="directive" data-id="' + n.id + '"><span class="bn-cost">🕴️ ' + num(n.cost) + '</span></button>');
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    return wrap;
   }
 
   function buildChallenges(st) {
@@ -644,13 +795,18 @@
   function buildSettings(st) {
     var panel = el.panels.settings;
     panel.innerHTML = '';
-    panel.appendChild(sectionTitle('Settings', ''));
+    panel.appendChild(sectionTitle('Your Empire', ''));
+    var ident = ce('div', 'settings-box');
+    ident.appendChild(rowBtn('🏷️  ' + (st.empireName ? '“' + st.empireName + '”' : 'Name your empire'), 'nameempire'));
+    panel.appendChild(ident);
 
+    panel.appendChild(sectionTitle('Settings', ''));
     var box = ce('div', 'settings-box');
     box.appendChild(toggleRow('Sound effects', 'sound', st.settings.sound));
     box.appendChild(toggleRow('Reduce motion', 'reduceMotion', st.settings.reduceMotion));
+    box.appendChild(toggleRow('Show only affordable', 'affordableOnly', st.settings.affordableOnly));
     box.appendChild(choiceRow('Number format', 'notation', st.settings.notation, [['standard', 'Standard'], ['scientific', 'Scientific']]));
-    if (ctrl.getDerived().board.autoBuyer) {
+    if (ctrl.getDerived().board.autoBuyer || ctrl.getDerived().syn.autoBuyer) {
       box.appendChild(toggleRow('Auto-Buyer (buys & hires for you)', 'autoBuyer', st.settings.autoBuyer));
     }
     panel.appendChild(box);
@@ -668,7 +824,7 @@
       'On iPhone: tap the <b>Share</b> icon in Safari, then <b>Add to Home Screen</b> for a full-screen, offline app.'));
     panel.appendChild(inst);
 
-    panel.appendChild(ce('div', 'version', 'MOGUL · v3.0 · made for you'));
+    panel.appendChild(ce('div', 'version', 'MOGUL · v4.0 · made for you'));
   }
 
   function toggleRow(label, key, on) {
@@ -709,10 +865,10 @@
     var rateExtra = (d.boomActive ? ' 🚀' : '') + (d.surgeActive ? ' ⚡' : '');
     el.rate.textContent = F.rate(d.managedIncomePerSec, { sci: sci }) + rateExtra;
 
-    // era chip
+    // era chip — shows your empire's name (with the era icon) once named
     var era = G.currentEra(st);
     el.eraChip.hidden = false;
-    el.eraChip.textContent = era.icon + '  ' + era.name;
+    el.eraChip.textContent = era.icon + '  ' + ((st.empireName && st.empireName.length) ? st.empireName : era.name);
 
     // combo
     if (st.combo > 1 && (ctrl.now() - st.lastTapAt) < D.CONFIG.comboWindow * 1000) {
@@ -730,17 +886,20 @@
     el.multVal.textContent = F.mult(d.globalProfit);
     updateSpark(st);
 
-    // reveal R&D tab once unlocked
+    // reveal gated tabs once unlocked
     if (el.tabRnd) el.tabRnd.hidden = !rndOpen;
+    var mktOpen = G.marketUnlocked(st);
+    if (el.tabMarket) el.tabMarket.hidden = !mktOpen;
 
     // attention dots
-    el.dotBoard.hidden = !(G.pendingInvestors(st, d) >= D.CONFIG.ipoMinInvestors);
+    el.dotBoard.hidden = !(G.pendingInvestors(st, d) >= D.CONFIG.ipoMinInvestors || G.canDynasty(st) || G.canSyndicate(st));
     if (el.dotRnd) el.dotRnd.hidden = !(rndOpen && anyInnovationAffordable(st));
 
     // active tab values
     if (activeTab === 'empire') updateEmpire(st, d);
     else if (activeTab === 'upgrades') updateUpgrades(st);
     else if (activeTab === 'rnd') updateRnd(st, d);
+    else if (activeTab === 'market') updateMarket(st, d);
     else if (activeTab === 'board') updateBoard(st, d);
   }
 
@@ -1013,6 +1172,8 @@
     floater: floater, burst: burst, hustleFx: hustleFx, goldRain: goldRain, flash: flash,
     spawnEventToken: spawnEventToken, catchToken: catchToken,
     modalRoot: function () { return el.modalRoot; },
-    setSciFromState: function () { sci = ctrl.getState().settings.notation === 'scientific'; }
+    setSciFromState: function () { sci = ctrl.getState().settings.notation === 'scientific'; },
+    getMarketFrac: function () { return marketFrac; },
+    setMarketFrac: function (v) { marketFrac = v; }
   };
 })(typeof window !== 'undefined' ? window : this);

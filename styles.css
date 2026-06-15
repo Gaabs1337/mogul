@@ -588,6 +588,52 @@ body::after {
 .screen-flash { position: fixed; inset: 0; z-index: 54; pointer-events: none; background: radial-gradient(60% 50% at 50% 40%, rgba(232, 198, 106, 0.28), transparent 70%); animation: flashfade .6s ease forwards; }
 @keyframes flashfade { from { opacity: 1; } to { opacity: 0; } }
 
+/* ===================== THE MARKET ===================== */
+.market-hero {
+  background: linear-gradient(160deg, rgba(95, 214, 160, 0.10), var(--surface-2) 55%);
+  border: 1px solid rgba(95, 214, 160, 0.28); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 10px;
+}
+.mh-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mh-stat { background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line-soft); border-radius: 12px; padding: 9px; text-align: center; }
+.mh-stat .k { display: block; font-size: 0.66rem; color: var(--muted); margin-bottom: 3px; }
+.mh-stat b { font-size: 0.98rem; }
+.mh-hint { font-size: 0.74rem; color: var(--muted); margin-top: 10px; text-align: center; line-height: 1.4; }
+.market-frac .ba-btn.is-on { background: linear-gradient(180deg, var(--green-bright), var(--green)); color: #0a2a1c; }
+
+.asset-list { display: flex; flex-direction: column; gap: 9px; }
+.asset { background: linear-gradient(180deg, var(--surface-2), var(--surface)); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 11px; }
+.asset-top { display: flex; align-items: center; gap: 10px; }
+.asset-ico { font-size: 1.5rem; flex: none; }
+.asset-id { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.1; }
+.asset-id b { font-size: 0.92rem; letter-spacing: .04em; }
+.asset-id span { font-size: 0.72rem; color: var(--muted); }
+.asset-price { font-weight: 800; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.asset-chart { display: block; width: 100%; height: 34px; margin: 8px 0; }
+.asset-bottom { display: flex; align-items: center; gap: 8px; }
+.asset-hold { flex: 1; min-width: 0; font-size: 0.76rem; color: var(--muted-2); }
+.asset-hold.has { color: var(--gold-bright); }
+.asset-actions { display: flex; gap: 7px; flex: none; }
+.asset-buy, .asset-sell { padding: 8px 16px; border-radius: 11px; border: none; font-family: var(--font); font-weight: 800; font-size: 0.84rem; transition: transform .08s, opacity .15s; }
+.asset-buy { background: linear-gradient(180deg, var(--green-bright), var(--green)); color: #0a2a1c; }
+.asset-sell { background: var(--surface-hi); color: var(--red); border: 1px solid rgba(232, 119, 108, 0.4); }
+.asset-buy:active, .asset-sell:active { transform: scale(0.95); }
+.asset-buy.cant, .asset-sell.cant { opacity: 0.35; }
+.pl-up { color: var(--green-bright) !important; }
+.pl-down { color: var(--red) !important; }
+
+/* ===================== SYNDICATE (prestige 3) ===================== */
+.syndicate { margin-top: 6px; }
+.syn-hero {
+  background: linear-gradient(160deg, rgba(138, 160, 200, 0.14), var(--surface-2) 55%);
+  border: 1px solid rgba(138, 160, 200, 0.34); border-radius: var(--radius-lg); padding: 16px;
+  box-shadow: 0 0 0 1px rgba(138, 160, 200, .18), 0 8px 26px -8px rgba(90, 110, 160, .3); margin-bottom: 8px;
+}
+.syn-btn { width: 100%; padding: 14px; border: none; border-radius: 14px; background: linear-gradient(180deg, #cdd9f0, #8aa0c8); color: #141a2a; font-family: var(--font); font-weight: 800; font-size: 1rem; letter-spacing: .02em; transition: transform .08s; }
+.syn-btn:active { transform: scale(0.98); }
+.syn-btn.cant { background: var(--surface-hi); color: var(--muted-2); }
+.syn-buy { background: linear-gradient(180deg, #cdd9f0, #8aa0c8) !important; color: #141a2a !important; }
+.syn-buy.cant { background: var(--surface-hi) !important; color: var(--muted-2) !important; }
+
 /* ===================== REDUCED MOTION ===================== */
 .reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
   animation-duration: 0.001s !important; animation-iteration-count: 1 !important;

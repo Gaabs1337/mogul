@@ -27,7 +27,9 @@
     ['#3f2a66', '#d06a4a', '#ffc27a', 0.30, false], // Global — dusk
     ['#2e2342', '#7e5446', '#caa37a', 0.45, true],  // Industrialist — smoggy dusk
     ['#0a0e2a', '#171a3a', '#dfe7ff', 0.85, true],  // Space — night
-    ['#0a0622', '#1c0e3e', '#e7d6ff', 1.0, true]    // Cosmic — deep space
+    ['#0a0622', '#1c0e3e', '#e7d6ff', 1.0, true],   // Cosmic — deep space
+    ['#0c0530', '#2e0a54', '#f3c0ff', 1.0, true],   // Multiversal — magenta nebula
+    ['#05040f', '#241640', '#fff0c8', 1.0, true]    // Singularity — radiant void
   ];
 
   function mulberry32(a) {

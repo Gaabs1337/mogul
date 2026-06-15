@@ -18,8 +18,14 @@ for a full-screen, offline app.
 - **R&D / Innovations** — a slow-burning *Insight* resource spent on a tree of
   rule-changing unlocks (Franchise Model, Synergy, Economies of Scale, …)
 - **Active Boosts** — Surge & Cash Injection on cooldowns, so late game stays active
+- **The Market** — a live stock exchange (mean-reverting prices); buy low, sell
+  high — a skill-based game-within-the-game
 - **IPO / Go Public** (prestige) → permanent Investors + a Boardroom upgrade tree
 - **Dynasty** (deep prestige) → permanent Legacy multipliers
+- **Syndicate** (3rd prestige) → permanent Influence + automation (auto-IPO,
+  auto-trade, auto-innovate, auto-challenge)
+- Name your empire; "show only affordable" filter; a click-cooldown so you never
+  have to mash
 - **Market Events** — tap floating opportunities for booms, frenzies, and windfalls
 - **The Pinnacle** — a real "you built it" win-state, then keep going forever
 - Achievements with real bonuses, full stats, generous offline earnings

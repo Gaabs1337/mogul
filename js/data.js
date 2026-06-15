@@ -27,6 +27,7 @@
     comboWindow: 1.6,               // seconds before combo resets
     comboPerTap: 0.04,              // combo multiplier growth per tap
     comboMax: 50,                   // taps until combo caps (×3 at default)
+    tapCooldownMs: 70,              // min ms between effective taps (caps auto-clickers, not humans)
 
     // --- Investors (prestige 1) ---
     // count grows ~sqrt(earnedAll) so it reaches large numbers (Dynasty stays
@@ -74,14 +75,26 @@
     boostInjectionCd: 210,          // cooldown seconds
 
     // --- Pinnacle (soft-cap / "you won" beat) ---
-    pinnacleEarned: 1e33,           // lifetime earnings for the Pinnacle celebration
+    pinnacleEarned: 1e42,           // lifetime earnings for the Pinnacle celebration
 
     // --- Challenges (restricted runs for permanent rewards) ---
     challengesUnlockIpos: 2,        // Challenges appear after this many IPOs
 
     // --- Boardroom Decisions (periodic strategic choices) ---
     decisionMinGap: 240,            // seconds between decision offers
-    decisionMaxGap: 420
+    decisionMaxGap: 420,
+
+    // --- The Market (skill-based trading; prices mean-revert => no free EV) ---
+    marketTickSec: 2.5,             // seconds between price updates
+    marketHistory: 40,              // price-history points kept per asset
+    marketUnlockIpos: 1,            // Market unlocks after this many IPOs
+    marketEventChance: 0.018,       // per tick chance of a crash/rally
+    marketTradeFrac: 0.25,          // default "Buy" spends this fraction of cash
+
+    // --- Syndicate (prestige 3) ---
+    syndicateUnlockLegacy: 12,      // total legacy ever needed to unlock Syndicate
+    syndicateScale: 4,              // influence = floor(sqrt(legacyAll / scale))
+    influencePerBonus: 0.25         // each influence point = +25% global profit
   };
 
   // ----------------------------------------------------------------------------
@@ -335,7 +348,12 @@
     { id: 'boost1', name: 'Power Player', desc: 'Trigger an Active Boost', icon: '⚡', bonus: 1.05, test: function (c) { return c.boostsUsed >= 1; } },
     { id: 'chal1', name: 'Against the Odds', desc: 'Complete a Challenge', icon: '🎯', bonus: 1.08, test: function (c) { return c.challengesDone >= 1; } },
     { id: 'chal_all', name: 'Undefeated', desc: 'Complete every Challenge', icon: '🥇', bonus: 1.30, test: function (c) { return c.challengesTotal > 0 && c.challengesDone >= c.challengesTotal; } },
-    { id: 'pinnacle', name: 'The Pinnacle', desc: 'Build the ultimate empire', icon: '🌌', bonus: 1.50, test: function (c) { return !!c.pinnacle; } }
+    { id: 'mkt1', name: 'Day Trader', desc: 'Make $1M trading the Market', icon: '📈', bonus: 1.05, test: function (c) { return c.marketProfit >= 1e6; } },
+    { id: 'mkt2', name: 'Wolf of Wall St.', desc: 'Make $1B trading the Market', icon: '🐺', bonus: 1.10, test: function (c) { return c.marketProfit >= 1e9; } },
+    { id: 'era_cosmic', name: 'Star Trader', desc: 'Reach the Cosmic Magnate era', icon: '🌌', bonus: 1.12, test: function (c) { return c.eraIndex >= 7; } },
+    { id: 'era_singular', name: 'Become Infinite', desc: 'Reach The Singularity', icon: '♾️', bonus: 1.40, test: function (c) { return c.eraIndex >= 9; } },
+    { id: 'syn1', name: 'The Syndicate', desc: 'Found a Syndicate', icon: '🕴️', bonus: 1.50, test: function (c) { return c.syndicates >= 1; } },
+    { id: 'pinnacle', name: 'The Pinnacle', desc: 'Build the ultimate empire', icon: '🌠', bonus: 1.50, test: function (c) { return !!c.pinnacle; } }
   ];
 
   function anyOwned(c, n) {
@@ -356,7 +374,9 @@
     { id: 'global',   name: 'Global Tycoon',     icon: '🌍', at: 1e14,  bonus: 1.20, blurb: 'Continents are just markets. The world runs on your supply chains.' },
     { id: 'industro', name: 'Industrialist',     icon: '🏭', at: 1e18,  bonus: 1.30, blurb: 'You make the things that make the things. Pure productive power.' },
     { id: 'space',    name: 'Space Baron',       icon: '🚀', at: 1e23,  bonus: 1.40, blurb: 'Earth was too small. Your rockets mine the asteroid belt now.' },
-    { id: 'cosmic',   name: 'Cosmic Magnate',    icon: '🌌', at: 1e28,  bonus: 1.60, blurb: 'Stars are line items. You trade in the currency of galaxies.' }
+    { id: 'cosmic',   name: 'Cosmic Magnate',    icon: '🌌', at: 1e28,  bonus: 1.60, blurb: 'Stars are line items. You trade in the currency of galaxies.' },
+    { id: 'multi',    name: 'Multiversal Tycoon', icon: '🌀', at: 1e32, bonus: 1.85, blurb: 'One universe was a starter market. You franchise across realities.' },
+    { id: 'singular', name: 'The Singularity',   icon: '♾️', at: 1e37,  bonus: 2.20, blurb: 'You are the economy now — an intelligence that prices infinity itself.' }
   ];
 
   // ----------------------------------------------------------------------------
@@ -394,8 +414,10 @@
     { id: 'insight2',   name: 'Think Tank',          desc: 'Insight generation ×3',             icon: '🧠', cost: 15000, effect: { kind: 'insightRate', value: 3 }, req: ['insight1'] },
     { id: 'eventInsight', name: 'Market Intelligence', desc: 'Opportunities appear faster & give Insight', icon: '📡', cost: 1800, effect: { kind: 'eventInsight', value: 50 } },
 
+    { id: 'synergy3',   name: 'Total Synergy',       desc: '+15% profit per managed business',  icon: '🕸️', cost: 250000, effect: { kind: 'synergy', value: 0.15 }, req: ['synergy2'] },
     { id: 'mega1',      name: 'Megacorporation',     desc: 'All profit ×10',                    icon: '🏛️', cost: 50000,  effect: { kind: 'profit', value: 10 }, req: ['synergy2', 'scale2'] },
-    { id: 'mega2',      name: 'Singularity, Inc.',   desc: 'All profit ×100',                   icon: '✨', cost: 500000, effect: { kind: 'profit', value: 100 }, req: ['mega1'] }
+    { id: 'mega2',      name: 'Singularity, Inc.',   desc: 'All profit ×100',                   icon: '✨', cost: 500000, effect: { kind: 'profit', value: 100 }, req: ['mega1'] },
+    { id: 'mega3',      name: 'Omnicorp',            desc: 'All profit ×1,000',                 icon: '🌠', cost: 8e6,    effect: { kind: 'profit', value: 1000 }, req: ['mega2'] }
   ];
 
   // ----------------------------------------------------------------------------
@@ -419,7 +441,9 @@
     { id: 'boot',   name: 'Bootstrapped', icon: '🥾', desc: 'No managers and no Franchise — run it by hand.', restriction: { noManagers: true }, goal: 1e8, reward: { kind: 'profit', value: 2 }, rewardDesc: 'All profit ×2, forever' },
     { id: 'frugal', name: 'Frugal',       icon: '🪙', desc: 'Cash upgrades are disabled this run.', restriction: { noUpgrades: true }, goal: 1e9, reward: { kind: 'speed', value: 1.5 }, rewardDesc: 'All speed ×1.5, forever' },
     { id: 'blitz',  name: 'Blitz',        icon: '⚡', desc: 'Reach the goal within 4 minutes.', restriction: { timeLimit: 240 }, goal: 1e9, reward: { kind: 'profit', value: 2.5 }, rewardDesc: 'All profit ×2.5, forever' },
-    { id: 'purist', name: 'Purist',       icon: '🧘', desc: 'Innovations are disabled this run.', restriction: { noInnovations: true }, goal: 1e10, reward: { kind: 'profit', value: 3 }, rewardDesc: 'All profit ×3, forever' }
+    { id: 'purist', name: 'Purist',       icon: '🧘', desc: 'Innovations are disabled this run.', restriction: { noInnovations: true }, goal: 1e10, reward: { kind: 'profit', value: 3 }, rewardDesc: 'All profit ×3, forever' },
+    { id: 'sprint', name: 'Sprint',       icon: '🏃', desc: 'Reach the goal within 2 minutes.', restriction: { timeLimit: 120 }, goal: 5e8, reward: { kind: 'speed', value: 1.5 }, rewardDesc: 'All speed ×1.5, forever' },
+    { id: 'ascetic', name: 'Ascetic',     icon: '🕉️', desc: 'No upgrades AND no innovations.', restriction: { noUpgrades: true, noInnovations: true }, goal: 1e11, reward: { kind: 'profit', value: 5 }, rewardDesc: 'All profit ×5, forever' }
   ];
 
   // ----------------------------------------------------------------------------
@@ -463,6 +487,34 @@
     }
   ];
 
+  // ----------------------------------------------------------------------------
+  // THE MARKET — tradable assets. Prices MEAN-REVERT around a baseline (no
+  // long-term drift => no free money; profit comes only from timing). `vol` is
+  // per-tick volatility, `rev` the pull back toward baseline.
+  // ----------------------------------------------------------------------------
+  var MARKET_ASSETS = [
+    { id: 'mgl', name: 'MOGUL 500',  ticker: 'MGL', icon: '🏛️', baseline: 1000, vol: 0.018, rev: 0.06 },
+    { id: 'lmn', name: 'Lemonade Co', ticker: 'LMN', icon: '🍋', baseline: 60,   vol: 0.035, rev: 0.05 },
+    { id: 'tch', name: 'TechCorp',   ticker: 'TCH', icon: '💻', baseline: 320,  vol: 0.060, rev: 0.045 },
+    { id: 'oil', name: 'PetroMax',   ticker: 'OIL', icon: '🛢️', baseline: 180,  vol: 0.050, rev: 0.05 },
+    { id: 'gld', name: 'Bullion',    ticker: 'GLD', icon: '🥇', baseline: 850,  vol: 0.022, rev: 0.04 },
+    { id: 'mun', name: 'MoonCoin',   ticker: 'MUN', icon: '🌝', baseline: 25,   vol: 0.110, rev: 0.05 }
+  ];
+
+  // ----------------------------------------------------------------------------
+  // SYNDICATE (prestige 3) — Directives bought with Influence. These unlock NEW
+  // mechanics (mostly automation) rather than raw multipliers.
+  // ----------------------------------------------------------------------------
+  var SYNDICATE_DIRECTIVES = [
+    { id: 'autoipo',    name: 'Auto-IPO',        desc: 'Automatically go public when worthwhile', icon: '🤖', cost: 1, effect: { kind: 'autoIPO' } },
+    { id: 'autobuyfree', name: 'Standing Orders', desc: 'Auto-Buyer works without the Board node',  icon: '📐', cost: 1, effect: { kind: 'autoBuyer' } },
+    { id: 'autotrade',  name: 'Trading Desk',    desc: 'A bot trades the Market for you',          icon: '📈', cost: 2, effect: { kind: 'autoTrade' } },
+    { id: 'autoinnov',  name: 'Skunkworks',      desc: 'Auto-buy affordable Innovations',          icon: '🧪', cost: 2, effect: { kind: 'autoInnovate' } },
+    { id: 'autochal',   name: 'War Council',     desc: 'Auto-run & win available Challenges',       icon: '⚔️', cost: 3, effect: { kind: 'autoChallenge' } },
+    { id: 'syn_profit', name: 'Cartel',          desc: 'All profit ×1000',                          icon: '🕴️', cost: 4, effect: { kind: 'profit', value: 1000 } },
+    { id: 'syn_insight', name: 'Hive Mind',      desc: 'Insight ×10 and keeps generating offline',  icon: '🧠', cost: 5, effect: { kind: 'insightRate', value: 10 } }
+  ];
+
   return {
     CONFIG: CONFIG,
     BUSINESSES: BUSINESSES,
@@ -478,6 +530,8 @@
     INNOVATIONS: INNOVATIONS,
     BOOSTS: BOOSTS,
     CHALLENGES: CHALLENGES,
-    DECISIONS: DECISIONS
+    DECISIONS: DECISIONS,
+    MARKET_ASSETS: MARKET_ASSETS,
+    SYNDICATE_DIRECTIVES: SYNDICATE_DIRECTIVES
   };
 });
